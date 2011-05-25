@@ -773,126 +773,138 @@ rev.comp <- function( seqs ) { ## Fast reverse-complement
                                       collapse="" ) )
 }
 
-## seq.type can be any of those listed or e.g. 'file=asdfg.fst' then get seqs from fasta file asdfg.fst
-get.sequences <- function( k, seq.type=paste( c("upstream","upstream.noncod","upstream.noncod.same.strand",
-                                "downstream","gene")[ 1 ], "meme" ), verbose=F, filter=T,
-                          distance=motif.upstream.search[[ seq.type ]], ... ) {
-  if ( length( k ) <= 0 ) return( NULL )
-  if ( is.numeric( k[ 1 ] ) ) rows <- get.rows( k )
-  else if ( ! is.null( e$genome.info$genome.seqs ) && k %in% names( e$genome.info$genome.seqs ) )
-    return( e$genome.info$genome.seqs[ k ] )
-  else rows <- k
-  if ( is.null( rows ) ) return( NULL )
-  start.stops <- NULL
-  if ( is.na( seq.type ) || strsplit( seq.type, " " )[[ 1 ]][ 1 ] == "gene" ) op.shift <- FALSE
-  seq.type <- seq.type; n.seq.type <- strsplit( seq.type, " " )[[ 1 ]][ 1 ]
+# Overrides the get.genome.info table as we don't need that
+get.sequences <- function(k, distance=motif.upstream.search[[seq.type]],
+                              remove.repeats=remove.low.complexity.subseqs,verbose=TRUE,
+                              seq.type=c("upstream","p3utr")[1], ...) {
 
-  if ( substr( seq.type, 1, 5 ) == "file=" ) { ## if seq.type is e.g. 'file=asdfg.fst' then get seqs from fasta file
-    seqs <- read.fasta( fname=strsplit( n.seq.type, "=" )[[ 1 ]][ 2 ] )
-    seqs <- seqs[ rows ]; names( seqs ) <- rows
-  } else {
-    if ( is.null( genome.info$feature.tab ) || ! "genome.seqs" %in% names( genome.info ) ||
-        is.null( genome.info$genome.seqs ) ) {
-      ##genome.info$all.upstream.seqs[[ seq.type ]]
-      if ( ! is.null( genome.info$all.upstream.seqs[[ seq.type ]] ) ) {
-        out.seqs <- genome.info$all.upstream.seqs[[ seq.type ]][ rows ]
-        out.seqs <- out.seqs[ ! is.na( out.seqs ) & out.seqs != "" ]
-        if ( filter ) out.seqs <- filter.sequences( out.seqs, NULL, seq.type, distance, verbose=verbose, ... )
-        return( invisible( out.seqs ) )
+  get.p3utr.seqs <- function(k, distance=motif.upstream.search$p3utr,
+                               remove.repeats=remove.low.complexity.subseqs, verbose=TRUE, ...) {
+    # Grab the sequence that are needed
+    if ( length( k ) <= 0 ) {
+      return( NULL )
+    }
+    if ( is.numeric( k[ 1 ] ) ) {
+      rows <- get.rows( k )
+    } else {
+      rows <- k
+    }
+    if ( is.null( rows ) ) {
+      return( NULL )
+    }
+    seqs = character()
+    names = rownames(genome.info$genome.seqs.p3utr)
+    #seqs = as.character(lapply(genome.info$genome.seqs[,1], substr, 1, distance.upstream[2]))
+    #names(seqs) = names
+    ## Note this can be sped up and parallelized
+    for(i in 1:length(rows)) {
+      if(rows[i] %in% names) {
+          tmpSeq = genome.info$genome.seqs.p3utr[which(names==rows[i]),]
+          #if (distance.p3utr[1]<=1) {
+          #    end1 = nchar(tmpSeq)
+          #} else {
+          #    end1 = nchar(tmpSeq)-distance.p3utr[1]
+          #}
+          #start1 = nchar(tmpSeq)-distance.p3utr[2]
+          start1 = distance[1]
+          end1 = distance[2]
+          if (start1<=0) {
+              start1 = 1
+          }
+          #seqs[rows[i]] = substr(tmpSeq,start1,end1)
+          seqs[rows[i]] = tmpSeq
       } else {
-        stop( "Motif searching is on but no ", seq.type, " sequences!" )
+        seqs[rows[i]] = NA
       }
     }
-    
-    op.shift <- operon.shift[ seq.type ]
-    
-    coos <- get.gene.coords( rows, op.shift )
-    if ( is.null( coos ) || nrow( coos ) <= 0 ) return( NULL )
-    coos <- subset( coos, ! is.na( start_pos ) & ! is.na( end_pos ) )
-    if ( is.null( coos ) || nrow( coos ) <= 0 ) return( NULL )
-    seqs <- character()
-
-    if ( n.seq.type %in% c( "upstream.noncod", "upstream.noncod.same.strand" ) ) {
-      all.coos <- genome.info$feature.tab[ ,c( "id", "name", "contig", "strand", "start_pos", "end_pos" ) ]
-      all.coos <- subset( all.coos, name %in% unlist( genome.info$synonyms ) )
-    }
-
-    ##len <- distance ##motif.upstream.search[[ n.seq.type ]]
-    ##for ( i in 1:nrow( coos ) ) {
-    mc <- get.parallel( nrow( coos ) )
-    tmp <- mc$apply( 1:nrow( coos ), function( i ) {
-      if ( n.seq.type == "gene" ) { ## Get the gene's seq
-        st.st <- coos[ i, c( "start_pos", "end_pos" ), drop=F ]
-      } else if ( n.seq.type == "upstream" ) { ## Get upstream
-        st.st <- if ( coos$strand[ i ] == "D" ) ## "D" is forward, "R" is reverse (what does D stand for?)
-          c( coos$start_pos[ i ] - 1 - distance[ 2 ], coos$start_pos[ i ] - 1 - distance[ 1 ] )
-        else c( coos$end_pos[ i ] + 1 + distance[ 1 ], coos$end_pos[ i ] + 1 + distance[ 2 ] )
-      } else if ( n.seq.type == "downstream" ) {
-        st.st <- if ( coos$strand[ i ] == "D" ) ## "D" is forward, "R" is reverse (what does D stand for?)
-          c( coos$end_pos[ i ] + 1 + distance[ 1 ], coos$end_pos[ i ] + 1 + distance[ 2 ] )
-        else c( coos$start_pos[ i ] - 1 - distance[ 2 ], coos$start_pos[ i ] - 1 - distance[ 1 ] )
-      } else if ( n.seq.type %in% c( "upstream.noncod", "upstream.noncod.same.strand" ) ) { ## Get upstream seq. but only up to previous gene
-        cc <- all.coos[ as.character( all.coos$contig ) == as.character( coos$contig[ i ] ) &
-                       abs( all.coos$start_pos - coos$start_pos[ i ] ) <= 100000, ]
-        if ( n.seq.type == "upstream.noncod.same.strand" )
-          cc <- all.coos[ as.character( all.coos$strand ) == as.character( coos$strand[ i ] ), ]
-        if ( coos$strand[ i ] == "D" ) {
-          nearest <- max( cc$end_pos[ cc$end_pos < coos$start_pos[ i ] ] )
-          st.st <- c( nearest, coos$start_pos[ i ] - distance[ 1 ] - 1 )
-        } else if ( coos$strand[ i ] == "R" ) {
-          nearest <- min( cc$start_pos[ cc$start_pos > coos$end_pos[ i ] ] )
-          st.st <- c( coos$end_pos[ i ] + distance[ 1 ] + 1, nearest )
-        }
-      }
-      seq <- substr( genome.info$genome.seqs[[ as.character( coos$contig[ i ] ) ]], st.st[ 1 ], st.st[ 2 ] )
-      if ( coos$strand[ i ] == "R" ) seq <- rev.comp( seq )
-      if ( nchar( seq ) > abs( diff( distance ) ) ) {
-        if ( coos$strand[ i ] == "D" ) seq <- substr( seq, 1, abs( diff( distance ) ) )
-        else seq <- rev.comp( substr( rev.comp( seq ), 1, abs( diff( distance ) ) ) )
-      }
-      ##seqs[ as.character( coos$names[ i ] ) ] <- seq
-      ##start.stops <- rbind( start.stops, data.frame( start=st.st[ 1 ], end=st.st[ 2 ],
-      ##                                              strand=as.character( coos$strand[ i ] ),
-      ##                                              contig=as.character( coos$contig[ i ] ) ) )
-      ##rownames( start.stops ) <- ##[ nrow( start.stops ) ] <- as.character( coos$names[ i ] )
-      ##  make.unique( c( rownames( start.stops )[ -nrow( start.stops ) ], as.character( coos$names[ i ] ) ) )
-      out <- list( seq=seq, name=as.character( coos$names[ i ] ),
-                  start.stops=data.frame( start=st.st[ 1 ], end=st.st[ 2 ],
-                    strand=as.character( coos$strand[ i ] ),
-                    contig=as.character( coos$contig[ i ] ) ) )
-      out
-    } )
-
-    for ( i in tmp ) {
-      seqs[ i$name ] <- i$seq
-      start.stops <- rbind( start.stops, i$start.stops )
-      ##rownames( start.stops ) <- make.unique( c( rownames( start.stops )[ -nrow( start.stops ) ], i$name ) )
-      rownames( start.stops )[ nrow( start.stops ) ] <- i$name
-    }
-    rownames( start.stops ) <- names( seqs ) <- make.unique( rownames( start.stops ) )
-    
-    rows <- rows[ rows %in% names( seqs ) ]
-    start.stops <- start.stops[ rows, ,drop=F ]
     seqs <- seqs[ rows ]
-    names( seqs ) <- rownames( start.stops ) <- rows
+    names( seqs ) <- rows
+
+    # Warn the user if not all coordiantes had a sequence and remove these elements from seqs
+    if ( any( is.na( seqs ) ) ) {
+      warning( "Warning: could not find 3' UTR sequences for all rows" )
+      seqs <- seqs[ ! is.na( seqs ) ]
+    }
+
+    # If there are no sequences then return NULL
+    if ( is.na(unique(seqs)[1]) && length(unique(seqs))==1) {
+      return(NULL)
+    }
+
+    # Remove low complexity subsequences, shouldn't be run if repeat masker was already run???
+    if (1) { #( remove.repeats && length( grep( "NNNNNN", seqs ) ) <= 1 ) {
+      if ( verbose ) {
+        cat( "Removing low-complexity regions from sequences.\n" )
+      }
+      # Uses "dust" by default, now. And also does entropy based exclusion.
+      seqs <- cMonkey:::remove.low.complexity( seqs ) 
+    }
+    return(seqs)
   }
+
+  #cat( "TEST: in overridden get.sequences function\n" )
+  if ( seq.type == "p3utr" ) return( get.p3utr.seqs( k, distance=motif.upstream.search$p3utr,
+         remove.repeats=remove.repeats, verbose=verbose ) )
+  else if ( seq.type != "upstream" ) stop( "Unknown sequence type!" )
   
+  # Grab the sequence that are needed
+  if ( length( k ) <= 0 ) {
+    return( NULL )
+  }
+  if ( is.numeric( k[ 1 ] ) ) {
+    rows <- get.rows( k )
+  } else {
+    rows <- k
+  }
+  if ( is.null( rows ) ) {
+    return( NULL )
+  }
+  seqs = character()
+  names = rownames(genome.info$genome.seqs)
+  #seqs = as.character(lapply(genome.info$genome.seqs[,1], substr, 1, distance.upstream[2]))
+  #names(seqs) = names
+
+  ## Note this can be sped up and parallelized
+  for(i in 1:length(rows)) {
+    if(rows[i] %in% names) {
+        tmpSeq = genome.info$genome.seqs[which(names==rows[i]),]
+        if (distance[1]<=1) {
+            end1 = nchar(tmpSeq)
+        } else {
+            end1 = nchar(tmpSeq)-distance[1]
+        }
+        start1 = nchar(tmpSeq)-distance[2]
+        if (start1<=0) {
+            start1 = 1
+        }
+        seqs[rows[i]] = substr(tmpSeq,start1,end1)
+    } else {
+      seqs[rows[i]] = NA
+    }
+  }
+  seqs <- seqs[ rows ]
+  names( seqs ) <- rows
+
+  # Warn the user if not all coordiantes had a sequence and remove these elements from seqs
   if ( any( is.na( seqs ) ) ) {
-    warning( "Warning: could not find '", n.seq.type, "' sequences for all input genes", call.=F )
-    if ( ! is.null( start.stops ) ) start.stops <- start.stops[ ! is.na( seqs ), ]
+    warning( "Warning: could not find upstream sequences for all rows" )
     seqs <- seqs[ ! is.na( seqs ) ]
   }
 
-  if ( filter ) seqs <- filter.sequences( seqs, start.stops, seq.type, distance, verbose=verbose, ... )
-  
-  attr( seqs, "start.stops" ) <- start.stops
-  invisible( seqs )
-}
+  # If there are no sequences then return NULL
+  if ( is.na(unique(seqs)[1]) && length(unique(seqs))==1) {
+    return(NULL)
+  }
 
-get.dup.seqs <- function( seqs ) {
-  out <- duplicated( seqs ) 
-  names( out ) <- names( seqs )
-  out
+  # Remove low complexity subsequences, shouldn't be run if repeat masker was already run???
+  if (1) { #( remove.repeats && length( grep( "NNNNNN", seqs ) ) <= 1 ) {
+    if ( verbose ) {
+      cat( "Removing low-complexity regions from sequences.\n" )
+    }
+    # Uses "dust" by default, now. And also does entropy based exclusion.
+    seqs <- cMonkey:::remove.low.complexity( seqs ) 
+  }
+  return(seqs)
 }
 
 ## TODO: need to provide options to filter/N out OTHER (upstream gene) ATGs and coding regions
