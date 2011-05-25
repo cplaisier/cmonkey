@@ -312,7 +312,11 @@ cmonkey.init <- function( env=NULL, ... ) {
 
   message( "Organism is ", organism, " ", cog.org, " ", rsat.species, " ", taxon.id )
 
-  genome.loc <- paste( rsat.urls[ 1 ], "/data/genomes/", rsat.species, "/genome/", sep="" )
+  if(rsat.species=='Homo_sapiens') {
+    genome.loc <- paste( rsat.urls[ 1 ], "/data/genomes/", rsat.species, "_EnsEMBL/genome/", sep="" )
+  } else {
+    genome.loc <- paste( rsat.urls[ 1 ], "/data/genomes/", rsat.species, "_EnsEMBL/genome/", sep="" )
+  }
   fname <- paste( "data/", rsat.species, "/organism.tab", sep="" )
   err <- dlf( fname, paste( genome.loc, "/organism.tab", sep="" ) )
   org.tab <- readLines( fname )

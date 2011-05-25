@@ -108,67 +108,134 @@ dlf <- function( f, url, msg=NULL, mode="wb", quiet=F, ... ) {
   err
 }
 
-# Overrides the get.genome.info function to:
-#   1. Load the seuqence data from a file (2Kbp is default)
-#   2. Make a thesaurus for gene id conversion (optimally to entrezIDs)
-get.genome.info <- function(promSeqFileName = 'promoterSeqs_set3pUTR_Final.csv.gz', p3utrSeqFileName = 'p3utrSeqs_set3pUTR_Final.csv.gz', synonymThesaurus = 'synonymThesaurus.csv.gz', ...) {
-  cat( "TEST: in overridden get.genome.info function\n" )
-  # First load up the sequence data
-  cat("Loading seqence data...\n")
-  genome.seqs <- read.csv(gzfile(promSeqFileName),as.is=T,header=F,row.names=1)
-  feature.names <- rownames(genome.seqs) <- toupper(rownames(genome.seqs))
-  genome.seqs.p3utr <- read.csv(gzfile(p3utrSeqFileName),as.is=T,header=F,row.names=1)
-  feature.names.p3utr <- rownames(genome.seqs.p3utr) <- toupper(rownames(genome.seqs.p3utr))
-
-  # Chooses the rsat.url to use: http://rsat.ulb.ac.be/rsat/
+#' Get the genome information.
+#' Returns a list: ( species=rsat.species, genome.seqs=genome.seqs, feature.tab=feature.tab, 
+#'       feature.names=feature.names,org.id=org.id, taxon.id=taxon.id, synonyms=synonyms )
+#'  
+#' @param fetch.upstream  (DEFAULT: F)
+#' @param fetch.predicted.operons  (DEFAULT: "rsat")
+#' @export
+#' @usage err <- get.genome.info( fetch.upstream=F, fetch.predicted.operons="rsat" )
+get.genome.info <- function( fetch.upstream=F, fetch.predicted.operons="rsat" ) { 
   rsat.url <- rsat.urls[ 1 ]
-  # Read in the data about the organsim from rsat
+  feature.tab <- feature.names <- genome.seqs <- operons <- org.id <- synonyms <- NULL 
+  genome.loc <- paste( rsat.url, "/data/genomes/", rsat.species, "/genome/", sep="" )
+
   fname <- paste( "data/", rsat.species, "/organism_names.tab", sep="" )
-  genome.loc <- paste( rsat.url, "/data/genomes/", rsat.species, "_EnsEMBL/genome/", sep="" )
-  
-  err <- cMonkey:::dlf( fname, paste( genome.loc, "organism_names.tab", sep="" ) ) # Trying to download the file
-  
-  # If the local file location doesn't exist then the file couldn't be downloaded, let the user know
+  err <- dlf( fname, paste( genome.loc, "/organism_names.tab", sep="" ) )
+  if ( class( err ) == "try-error" ) {
+    tmp.url <- paste( rsat.url, "/data/genomes/", rsat.species, "_EnsEMBL/genome/organism_names.tab", sep="" )
+    err <- dlf( fname, tmp.url ) 
+    if ( class( err ) != "try-error" ) genome.loc <- paste( rsat.url, "/data/genomes/", rsat.species, "_EnsEMBL/genome/", sep="" )
+  }
   if ( ! file.exists( fname ) || file.info( fname )$size <= 0 )
     stop( paste( "Genome info for", rsat.species, "does not exist. Please check", genome.loc,
                 "and let me know if I am wrong" ) )
+  nskip <- sum( substr( readLines( gzfile( fname ), n=20 ), 1, 2 ) == "--" |
+               readLines( gzfile( fname ), n=20 ) == "" )
+  org.id <- read.delim( gzfile( fname ), head=F, as.is=T, skip=nskip ) 
+  if ( ! exists( "taxon.id" ) || is.na( taxon.id ) || is.null( taxon.id ) ) taxon.id <- org.id$V1[ 1 ]
+  cat( "Organism taxon id:", taxon.id, "\n" ) 
+  closeAllConnections()
   
-  # Figure out how many lines to skip based on '--' at fron of line
-  nskip <- sum( substr( readLines( gzfile( fname ), n=20 ), 1, 2 ) == "--" | readLines( gzfile( fname ), n=20 ) == "" )
-  # Get the org.id from the file and skip the '--' lines
-  org.id <- read.delim( gzfile( fname ), head=F, as.is=T, skip=nskip )
-  # The taxon.id is the first column
-  taxon.id <- org.id$V1[ 1 ]
-  # Tell the user what the taxon.id is
-  cat( "Organism taxon id:", taxon.id, "\n" )
-  
-  # Write the feature_names.tab or cds_names.tab file into feature_names.tab in the data directory
-  fname <- paste( "data/", rsat.species, "/feature_names.tab", sep="" )
-  # Get the file
-  err <- cMonkey:::dlf( fname, paste( genome.loc,"cds_names.tab", sep="" ) )
-  # Skip the '--' header
-  nskip <- sum( substr( readLines( gzfile( fname ), n=20 ), 1, 2 ) == "--" )
-  feature.names <- read.delim( gzfile( fname ), head=F, as.is=T, skip=nskip, row.names=NULL, comment='' )
-  # Set the column names for this file
-  colnames( feature.names ) <- c( "id", "names", "type" )
-  # Remove dupliate rows
-  feature.names <- unique( feature.names )
-  
-  # Load thesaurus file and turn it into a list of character arrays which are keyed with
-  # a probe id, and then have the synonyms as the elements of the character array.
-  # If an element doesn't exist for a gene then leave it out of the character array.
-  cat("Loading synonym information...")
-  tmp <- read.csv(gzfile(synonymThesaurus),header=F)
-  synonyms <- 1:length(names) #<- as.character(lapply(tmp[,2],strsplit,';'))
-  #c(1:length(tmp[,1]))
-  for(i in 1:length(tmp[,1])) {
-    synonyms[i] <- strsplit(toupper(as.character(tmp[i,2])),';')
-  }
-  synonyms <- as.list(synonyms)
-  names(synonyms) <- toupper(tmp[,1])
+  if ( ! no.genome.info ) {
+    fname <- paste( "data/", rsat.species, "/feature.tab", sep="" )
+    use.cds <- FALSE
+    err <- dlf( fname, paste( genome.loc, "feature.tab", sep="" ),
+               paste( "Fetching genome annotation data from RSAT", rsat.url, "..." ) )
+    if ( class( err ) == "try-error" ) {
+      err <- dlf( fname, paste( genome.loc, "cds.tab", sep="" ) )
+      use.cds <- TRUE
+    }
+    cat( "Loading genome annotation data...\n" )
+    head <- readLines( gzfile( fname ), n=30 ); nskip <- length( grep( '^--', head ) )
+    feature.tab <- read.delim( gzfile( fname ), skip=nskip, head=F, comment='', as.is=F ) ##skip=16, 
+    closeAllConnections()
+    head <- strsplit( gsub( '^-- ', '', head[ grep( '^-- id', head, perl=T ) ], perl=T ), "\t" )[[ 1 ]]
+    colnames( feature.tab ) <- head[ 1:ncol( feature.tab ) ]
+    fname <- paste( "data/", rsat.species, "/feature_names.tab", sep="" )
+    err <- dlf( fname, paste( genome.loc, if ( ! use.cds ) "feature_names.tab" else "cds_names.tab", sep="" ) )
+    nskip <- sum( substr( readLines( gzfile( fname ), n=20 ), 1, 2 ) == "--" )
+    closeAllConnections()
+    feature.names <- read.delim( gzfile( fname ), head=F, as.is=T, skip=nskip, row.names=NULL, comment='' ) 
+    closeAllConnections()
+    colnames( feature.names ) <- c( "id", "names", "type" ) 
+    feature.names <- unique( feature.names )
+    chroms <- unique( as.character( feature.tab$contig ) )
+    chroms <- chroms[ ! is.na( chroms ) & chroms != "" ]
 
-  invisible( list( genome.seqs=genome.seqs, feature.names=feature.names, genome.seqs.p3utr=genome.seqs.p3utr, feature.names.p3utr=feature.names.p3utr, synonyms=synonyms, org.id=org.id , taxon.id = taxon.id) )
+    
+    if ( ! is.na( mot.iters[ 1 ] ) ) {
+      genome.seqs <- list()
+      ##genome.seqs <- toupper( lapply(
+      for ( i in chroms ) { ##, function( i ) {
+        ## NOTE this is still bad as it loads entire genome into memory FIRST -- even when big.memory==TRUE
+        cat( "Loading genome sequence, chromosome", i, "\n" )
+        fname <- paste( "data/", rsat.species, "/", i, ".raw", sep="" )
+        err <- dlf( fname, paste( genome.loc, i, ".raw", sep="" ) )
+        if ( class( err ) == "try-error" ) {
+          ii <- gsub( ":", "_", i, fixed=T )
+          err <- dlf( fname, paste( genome.loc, ii, ".raw", sep="" ) )
+          if ( class( err ) == "try-error" ) {
+            err <- dlf( fname, paste( genome.loc, gsub( ".[0-9]$", "", i ), ".raw", sep="" ) )
+            if ( class( err ) == "try-error" ) cat( "ERROR reading genome sequence", i, "\n" )
+            else fname <- paste( "data/", rsat.species, "/", gsub( ".[0-9]$", "", i ), ".raw", sep="" )
+          } else fname <- paste( "data/", rsat.species, "/", ii, ".raw", sep="" )
+        }
+        out <- try( readLines( gzfile( fname ) ), silent=T )
+        if ( class( out ) == "try-error" || length( out ) == 0 ) cat( "ERROR reading genome sequence", i, "\n" )
+        closeAllConnections()
+        if ( class( out ) == "try-error" || length( out ) == 0 || is.na( out ) || out == "" ||
+            out == "CHARACTER(0)" ) {
+          cat( "ERROR reading genome sequence", i, "\n" )
+          next
+        }
+        out <- toupper( out )
+        ##out } ) )
+        genome.seqs[[ i ]] <- out
+      }
+      ##names( genome.seqs ) <- chroms
+      ##genome.seqs <- genome.seqs[ ! ( is.na( gs ) | gs == "" | gs == "CHARACTER(0)" ) ]
+      if ( length( genome.seqs ) != length( chroms ) ) {
+        cat( "WARNING: Could not read sequence for chromosomes", chroms[ ! chroms %in% names( genome.seqs ) ], "\n" )
+        feature.tab <- subset( feature.tab, contig %in% names( genome.seqs ) )
+      }
+      if ( length( genome.seqs ) <= 0 ) genome.seqs <- NULL
+    }
+
+    if ( exists( "ratios" ) && ! is.null( ratios ) ) {
+      cat( "Gathering all \"standard\" orf names and other synonyms for all probe names...\n" )
+      tmp <- get.synonyms( attr( ratios, "rnames" ), feature.names, verbose=T ) 
+      is.bad <- sapply( names( tmp ), function( i ) length( tmp[[ i ]] ) == 0 ||
+                       substr( tmp[[ i ]][ 1 ], 1, 5 ) == "Error" )
+      if ( sum( is.bad ) > 0 ) {
+        cat( "These", sum( is.bad ), "probe names have no matching ORF annotation:\n" )
+        print( names( which( is.bad ) ) )
+      }
+      
+      cat( "Mean number of synonyms per probe:", mean( sapply( tmp, length ), na.rm=T ), "\n" )
+      synonyms <- tmp
+      rm( tmp, is.bad )
+    }
+  
+    if ( ! is.na( mot.iters[ 1 ] ) && fetch.upstream ) {
+      ## Can optionally also get upstream 400bp seqs (or upstream seqs not overlapping w/ orfs):
+      ## Naah, lets extract the sequences ourselves! (See get.sequences() below.)
+      fname <- paste( "data/", rsat.species, "/upstream-noorf.fasta.gz", sep="" )
+      err <- dlf( fname, paste( genome.loc, rsat.species, "_upstream-noorf.fasta.gz", sep="" ),
+                 "Fetching upstream sequences from RSAT..." )
+      upstream.noorf <- readLines( gzfile( fname ) )
+      fname <- paste( "data/", rsat.species, "/upstream.fasta.gz", sep="" )
+      err <- dlf( fname, paste( genome.loc, rsat.species, "_upstream.fasta.gz", sep="" ) )
+      upstream <- readLines( gzfile( fname ) )
+    }
+  }
+  closeAllConnections()
+  
+  invisible( list( species=rsat.species, genome.seqs=genome.seqs, feature.tab=feature.tab, feature.names=feature.names,
+                  org.id=org.id, taxon.id=taxon.id, synonyms=synonyms ) ) 
 }
+
 
 ## Can get operon predictions from RSAT (http://rsat.ccb.sickkids.ca/infer-operons.cgi).
 ## See http://rsat.ccb.sickkids.ca/help.infer-operons.html for how these are computed.
