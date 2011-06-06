@@ -86,6 +86,88 @@ preprocess.ratios <- function( ratios, filter=T, normalize=T, col.groups=NULL, f
   ratios
 }
 
+#ifndef PACKAGE
+load.ratios.MicrobesOnline <- function() {
+  f <- sprintf( "data/%s/microbesOnlineExprData_%d.tsv", rsat.species, taxon.id )
+  if ( ! file.exists( sprintf( "%s.gz", f ) ) ) {
+    timeout <- options( timeout=600 ) ## they can be very slow...
+    try( dlf( f, sprintf( "http://www.microbesonline.org/cgi-bin/microarray/getData.cgi?taxId=%d", taxon.id ) ) )
+    system( sprintf( "gzip -fv %s", f ) )
+    options( timeout=timeout$timeout )
+  }
+  cat( "Loading:", f, "\n" )
+  rats <- read.delim( gzfile( sprintf( "%s.gz", f ) ), row.names=1, sep="\t", as.is=T, head=T )
+  as.matrix( rats )
+}
+
+load.genome.info.MicrobesOnline <- function() {
+  f <- sprintf( "data/%s/microbesOnlineGenomeInfo_%d.tsv", rsat.species, taxon.id )
+  if ( ! file.exists( sprintf( "%s.gz", f ) ) ) {
+    try( dlf( f, sprintf( "http://www.microbesonline.org/cgi-bin/genomeInfo.cgi?tId=%d;export=tab", taxon.id ) ) )
+    system( sprintf( "gzip -fv %s", f ) )
+  }
+  cat( "Loading:", f, "\n" )
+  out <- read.delim( gzfile( sprintf( "%s.gz", f ) ), row.names=1, sep="\t", as.is=T, head=T )
+  out
+} 
+
+#' Load a ratios matrix based on GEO search terms
+#'  
+#' @param search.terms  GEO search terms (DEFAULT: gsub( "_", " ", rsat.species ))
+#' @export
+#' @usage ratios <- load.ratios.GEO()
+load.ratios.GEO <- function( search.terms ) {
+  if ( missing( search.terms ) ) search.terms <- gsub( "_", " ", rsat.species )
+  message( "Searching GEO for terms='", search.terms, "'" )
+  search.terms <- URLencode( search.terms )
+  try( dlf( sprintf( "data/%s/GEO_search.xml", rsat.species ),
+           sprintf( 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=%s&retmax=99999',
+                   search.terms ) ) )
+  tmp <- readLines( sprintf( "data/%s/GEO_search.xml", rsat.species ) )
+  tmp <- grep( '<Id>\\d+</Id>', tmp, perl=T, val=T )
+  ids <- sapply( strsplit( tmp, "[<>]" ), "[", 3 )
+  ids <- gsub( "^20+", "", gsub( "^10+", "", ids ) ) ## some ids have '2000' or '1000' at their beginning for some reason
+  cat( "Downloading GEO series:", ids, "\n" )
+  for ( id in ids ) {
+    err <- try( dlf( sprintf( "data/%s/GSE%s_series_matrix.txt.gz", rsat.species, id ),
+        sprintf( "ftp://ftp.ncbi.nih.gov/pub/geo/DATA/SeriesMatrix/GSE%s/GSE%s_series_matrix.txt.gz", id, id ) ) )
+    if ( class( err ) == "try-error" ) { ## Probably has multiple filenames, get a listing...
+      require( RCurl )
+      tmp <- try( getURL( sprintf( "ftp://ftp.ncbi.nih.gov/pub/geo/DATA/SeriesMatrix/GSE%s/", id ) ) )
+      i <- 0
+      while( class( tmp ) == "try-error" && ( i <- i + 1 ) < 10 )
+        tmp <- try( getURL( sprintf( "ftp://ftp.ncbi.nih.gov/pub/geo/DATA/SeriesMatrix/GSE%s/", id ) ) )
+      tmp <- strsplit( tmp, "\n" )[[ 1 ]]
+      tmp <- sapply( tmp, function( i ) strsplit( i, "\\s+" )[[ 1 ]][ 9 ] ); names( tmp ) <- NULL
+      for ( id2 in tmp ) {
+        err <- try( dlf( sprintf( "data/%s/%s", rsat.species, id2 ),
+             sprintf( "ftp://ftp.ncbi.nih.gov/pub/geo/DATA/SeriesMatrix/GSE%s/%s", id, id2 ) ) )
+      }
+    }
+  }
+  out <- list()
+  for ( f in list.files( patt=glob2rx( "GSE*_series_matrix.txt.gz" ),
+                        path=sprintf( "data/%s/", rsat.species ), full=T ) ) {
+    if ( file.info( f )$size == 0 ) next
+    cat( "Loading:", f, "\n" )
+    rats <- read.delim( gzfile( f ), comment='!' )
+    rownames( rats ) <- sapply( strsplit( as.character( rats[[ 1 ]] ), "|", fixed=T ), "[", 1 )
+    out[[ basename( f ) ]] <- as.matrix( rats[ ,-1 ] )
+  }
+  out
+}
+
+#' Return the condition groups for conds
+#'  
+#' @param conds  The conditions to return groups for (DEFAULT: attr( ratios, "cnames" ), i.e. "all" )
+#' @export
+#' @usage cond.groups <- get.condition.groups( conds=attr( ratios, "cnames" ) )
+get.condition.groups <- function( conds=attr( ratios, "cnames" ) ) {
+  tmp <- sapply( conds, function( i ) strsplit( i, "__" )[[ 1 ]][ 1 ] ) ## Specific for halo
+  tmp2 <- as.integer( as.factor( tmp ) ); names( tmp2 ) <- names( tmp )
+  tmp2
+}
+#endif
 
 #' Download a file from the internet.  A wrapper for download.file()
 #'  
@@ -137,8 +219,9 @@ get.genome.info <- function( fetch.upstream=F, fetch.predicted.operons="rsat" ) 
   if ( ! exists( "taxon.id" ) || is.na( taxon.id ) || is.null( taxon.id ) ) taxon.id <- org.id$V1[ 1 ]
   cat( "Organism taxon id:", taxon.id, "\n" ) 
   closeAllConnections()
-  
-  if ( ! no.genome.info ) {
+
+  ## If we are getting all sequences from a fasta or csv file, skip downloading of genome seq info
+  if ( ! no.genome.info && ! all( grepl( "file=", names( mot.weights ) ) ) ) {
     fname <- paste( "data/", rsat.species, "/feature.tab", sep="" )
     use.cds <- FALSE
     err <- dlf( fname, paste( genome.loc, "feature.tab", sep="" ),
@@ -164,6 +247,9 @@ get.genome.info <- function( fetch.upstream=F, fetch.predicted.operons="rsat" ) 
     chroms <- unique( as.character( feature.tab$contig ) )
     chroms <- chroms[ ! is.na( chroms ) & chroms != "" ]
 
+#ifndef PACKAGE
+    ##if ( FALSE && big.memory ) genome.seqs <- list.reference( l=NULL, sprintf( "%s/genome.seqs", cmonkey.filename, type="RDS" ) )
+#endif
     
     if ( ! is.na( mot.iters[ 1 ] ) ) {
       genome.seqs <- list()
@@ -192,6 +278,17 @@ get.genome.info <- function( fetch.upstream=F, fetch.predicted.operons="rsat" ) 
           next
         }
         out <- toupper( out )
+#ifndef PACKAGE
+        ## Note - can store genomes as on-disk factors, would help for big genomes like human, ath
+        ## then extract subseqs via, e.g. 'as.character(genome.info$genome.seqs[[1]][10:20])'
+        ## Not sure how to do this with bigmemory package.
+        if ( FALSE && big.memory == TRUE ) {
+          rf <- as.factor( strsplit( out, character( 0 ) )[[ 1 ]] )
+          require( ff ); frf <- ff( rf, vmode="quad", levels=levels( rf ),
+                                   filename=sprintf( "./%s/%s.genome.ff", cmonkey.filename, i ) )
+          out <- frf
+        }
+#endif        
         ##out } ) )
         genome.seqs[[ i ]] <- out
       }
@@ -216,6 +313,9 @@ get.genome.info <- function( fetch.upstream=F, fetch.predicted.operons="rsat" ) 
       
       cat( "Mean number of synonyms per probe:", mean( sapply( tmp, length ), na.rm=T ), "\n" )
       synonyms <- tmp
+#ifndef PACKAGE
+##      if ( big.memory ) synonyms <- list.reference( synonyms, sprintf( "%s/synonyms.dump", cmonkey.filename ) )
+#endif
       rm( tmp, is.bad )
     }
   

@@ -95,6 +95,13 @@ clusters.w.conds <- function( conds, ks=1:k.clust, p.val=F ) {
 ##   table( tmp )
 ## }
 
+#ifndef PACKAGE
+cluster.loglik <- function( k ) {
+  l.in <- rr.scores[ get.rows( k ), k ]
+  l.out <- rr.scores[ ! rownames( rr.scores ) %in% get.rows( k ), k ]
+  sum( log( c( l.in, 1 - l.out ) + 1e-99 ), na.rm=T )
+}
+#endif
 
 cluster.summary <- function( e.cutoff=0.01, nrow.cutoff=5, seq.type=names( mot.weights )[ 1 ], plot=F,
                             sort=c("score.norm","score","resid","e.value1","e.value2","nrow") ) { ##"loglik",
@@ -111,6 +118,9 @@ cluster.summary <- function( e.cutoff=0.01, nrow.cutoff=5, seq.type=names( mot.w
   nrow <- tabulate( unlist( apply( row.membership, 1, unique ) ), k.clust )
 
   out <- data.frame( k=1:k.clust, nrow=nrow, score=score, ##score.norm=score.norm,
+#ifndef PACKAGE
+                    loglik=sapply( 1:k.clust, cluster.loglik ),
+#endif
                     resid=sapply( 1:k.clust, cluster.resid, varNorm=F ), 
                     consensus1=sapply( 1:k.clust,
                       function( k ) if ( is.null( ms ) || length( ms[[ k ]] ) <= 3 ) "" else
@@ -129,6 +139,26 @@ cluster.summary <- function( e.cutoff=0.01, nrow.cutoff=5, seq.type=names( mot.w
                     )
   if ( all( out$consensus2 == "" ) ) out$consensus2 <- out$e.value2 <- NULL
   if ( ! is.na( sort[ 1 ] ) && sort[ 1 ] %in% colnames( out ) ) out <- out[ order( out[[ sort[ 1 ] ]] ), ]
+#ifndef PACKAGE
+  ss <- smooth.spline( nrow[ ! is.na( score ) ], score[ ! is.na( score ) ], spar=0.6 ) ## Remove nrow dependency of score, this seems to work pretty well
+  score.norm <- score - predict( ss, nrow )$y + out$resid
+  ## if ( plot ) {
+  ##   plot( nrow, score, typ="n" )
+  ##   text( nrow, score, lab=out$k, cex=0.7, xpd=NA )
+  ##   lines( ss$x, ss$y, col="red" )
+  ## }
+  out <- cbind( out[ ,1:3 ], score.norm, out[ ,4:ncol( out ) ] )
+  if ( ! is.na( e.cutoff ) ) {
+    if ( "e.value2" %in% colnames( out ) ) out <- out[ out$e.value1 <= e.cutoff | out$e.value2 <= e.cutoff, ]
+    else out <- out[ out$e.value1 <= e.cutoff, ]
+  }
+  if ( ! is.na( nrow.cutoff ) ) out <- out[ out$nrow >= nrow.cutoff, ]
+  if ( plot ) {
+    plot( out$resid, log10( -log10( out$e.value1 ) ), typ="n" )
+    text( out$resid, log10( -log10( out$e.value1 ) ), lab=out$consensus1, cex=0.7, xpd=NA, pos=1 )
+    text( out$resid, log10( -log10( out$e.value1 ) ), lab=rownames( out ), cex=0.7, xpd=NA, col="red" )
+  }
+#endif
   out
 }
 
@@ -331,6 +361,24 @@ update.cmonkey.env <- function( object, ... ) { ## Update all funcs contained in
     if ( is.function( f ) ) assign( i, f, object )
   }
 
+#ifndef PACKAGE
+  ## If matrices were stored in ff's then ff "closes" them upon exit. This will "reopen" them as long
+  ##   as the file backing exists. An alternative is to use the save.cmonkey.env() function below which
+  ##   will slurp them into memory before saving them. But that won't work if they're TOO big.
+  if ( FALSE && ( env$big.memory == TRUE || env$big.memory > 0 ) ) {
+    for ( i in c( "row.scores", "mot.scores", "net.scores", "r.scores", "rr.scores", "col.scores", "net.scores",
+                 "row.memb", "col.memb", "cc.scores" ) )
+      if ( ! is.null( env[[ i ]] ) && require( bigmemory ) && is.big.matrix( env[[ i ]] ) )
+        attach.big.matrix( get( i, env ) )
+    for ( i in 1:length( env$ratios ) ) {
+      if ( ! is.null( env$ratios[[ i ]] ) && require( bigmemory ) && is.big.matrix( env$ratios[[ i ]] ) )
+        attach.big.matrix( env$ratios[[ i ]] )
+    ## for ( i in 1:length( env$meme.scores ) ) for ( j in c( "all.pv", "all.ev" ) ) {
+    ##   if ( ! is.null( env$meme.scores[[ i ]][[ j ]] ) && "ff" %in% class( env$meme.scores[[ i ]][[ j ]] ) )
+    ##     if ( require( ff, warn=F, quiet=T ) ) open.ff( env$meme.scores[[ i ]][[ j ]] )
+    }
+  }
+#endif
   ##invisible( env )
 }
 
@@ -394,6 +442,56 @@ adjust.clust <- function( k, row.memb=get("row.membership"), expand.only=T, limi
   invisible( list( r=row.memb ) )
 }
 
+#ifndef PACKAGE
+## Now we either:
+##   add outside genes that are better than in-genes with scores at the 66% quantile (of in-gene scores) level.
+##       (quant.cutoff > 0) or add N best outside genes (quant.cutoff > 1)
+##   or remove inside genes that are worse than out-genes with scores at the 0.1% quantile (of out-gene scores) level.
+##       (quant.cutoff < 0) or remove N worst inside genes (quant.cutoff < 1)
+adjust.clust.2 <- function( k, row.memb=get("row.membership"), limit=10,
+                         scores="r.scores", quant.cutoff=0.33 ) {
+  if ( scores == "rr.scores" ) {
+    if ( ! exists( "rr.scores" ) ) scores <- get.density.scores( ks=1:k.clust )$r
+    else scores <- get( scores )
+    scores <- 1 - scores[,]
+  } else {
+    scores <- get( scores )
+  }
+  scores <- scores[,] ## In case it's an ff
+  old.rows <- get.rows( k )
+  if ( quant.cutoff > 0 ) { ## Find genes to add to bicluster
+    if ( quant.cutoff < 1 ) wh <- names( which( scores[ which( ! attr( ratios, "rnames" ) %in% old.rows ), k ] <
+                       quantile( scores[ old.rows, k ], quant.cutoff, na.rm=T ) ) )
+    else wh <- names( sort( scores[ ! attr( ratios, "rnames" ) %in% old.rows, k ], decreasing=F )[ 1:quant.cutoff ] )
+  } else { ## Find genes to remove from bicluster
+    if ( quant.cutoff > -1 ) wh <- names( which( scores[ old.rows, k ] >
+                                                quantile( scores[ which( ! attr( ratios, "rnames" ) %in%
+                                                                old.rows ), k ], abs( quant.cutoff ), na.rm=T ) ) )
+    else wh <- names( sort( scores[ old.rows, k ], decreasing=T )[ 1:abs( quant.cutoff ) ] )
+  }
+  if ( length( wh ) > limit ) { warning( "Surpassing limit." ); return( invisible( list( r=row.memb ) ) ) }
+  else if ( length( wh ) <= 0 ) return( invisible( list( r=row.memb ) ) )
+  tries <- 0
+  rm <- row.memb + 0 ## make a copy
+  rm <- cbind( rm, rep( 0, nrow( rm ) ) )
+  while( length( wh ) > 0 && tries < 50 ) {
+    if ( quant.cutoff > 0 ) { ## add outside genes to this bicluster
+      rm[ wh, ncol( rm ) ] <- k
+    } else {
+      for ( w in wh ) rm[ w, which( rm[ w, ] == k ) ] <- 0
+    }
+    if ( length( get.rows( k, rm=rm ) ) > cluster.rows.allowed[ 2 ] ) break
+    tries <- tries + 1
+  }
+  new.rows <- get.rows( k, rm=rm )
+  if ( any( ! new.rows %in% old.rows ) || any( ! old.rows %in% new.rows ) )
+    cat( "ADJUSTED CLUSTER:", k, length( old.rows ), length( new.rows ), "\n" )
+  rm <- t( apply( rm, 1, function( i ) c( i[ i != 0 ], i[ i == 0 ] ) ) )
+  rm <- rm[ ,apply( rm, 2, sum ) != 0, drop=F ]
+  colnames( rm ) <- NULL
+  invisible( list( r=rm ) )
+}
+#endif
 
 adjust.all.clusters <- function( env, ks=1:env$k.clust, force.motif=T, ... ) {
   old.stats <- env$stats
@@ -423,7 +521,7 @@ adjust.all.clusters <- function( env, ks=1:env$k.clust, force.motif=T, ... ) {
 ##   tmp <- env$get.all.scores( force.row=T, force.col=T, force.motif=force.motif & ! no.genome.info, force.net=T )
 ##   env$row.scores <- tmp$r[,]; env$mot.scores <- tmp$m[,]; env$net.scores <- tmp$n[,]; env$col.scores <- tmp$c[,]
 ##   env$meme.scores <- tmp$ms
-## #!ifndef 
+## #ifndef PACKAGE
 ##   for ( i in names( env$meme.scores ) ) {
 ##     for ( j in c( "all.pv", "all.ev" ) ) {
 ##       if ( ! is.null( env$meme.scores[[ i ]][[ j ]] ) && "ff" %in% class( env$meme.scores[[ i ]][[ j ]] ) ) {
@@ -433,7 +531,7 @@ adjust.all.clusters <- function( env, ks=1:env$k.clust, force.motif=T, ... ) {
 ##       }
 ##     }
 ##   }
-## #!endif
+## #endif
 ##   env$row.memb <- t( apply( env$row.membership, 1, function( i ) 1:k.clust %in% i ) )
 ##   env$col.memb <- t( apply( env$col.membership, 1, function( i ) 1:k.clust %in% i ) )
   
