@@ -19,7 +19,7 @@ get.enrichment.sets <- function(set.types=NA) {
   # Read in file
   enrichment.sets <- list()
   for (set.type.i in names(set.types)) {
-    d1 = read.csv(file=set.type.i[set.type.i], header=F)
+    d1 = read.csv(file=set.types[[set.type.i]]['file'], header=F)
     d2 = list()
     for(i in unique(d1[,1])) {
       tmp.vector.names <- d1[which(d1[,1]==i),2]
@@ -44,7 +44,7 @@ get.enrichment.sets <- function(set.types=NA) {
 ##  k <- can either be the cluster index or an array or probe ids.
 ##  set <- the name of the set to be used to calculate enrichment.
 get.set.enrichment.scores <- function( k, set=NA) {
-  # Make sure that things are right for anlaysis (took some of these from Dave)
+  # Make sure that things are right for anlaysis (took some of this from Daves Network scoring function)
   if ( length( k ) <= 0 ) {
     stop('get.set.enrichment.scores <- k is not set.')
   }
@@ -60,6 +60,8 @@ get.set.enrichment.scores <- function( k, set=NA) {
   if ( length( rows ) < 1 ) {
     return( rep( NA, length( all.rows ) ) )
   }
+
+  ###   Hypergeometric - Choose best set   ###
   # Now calculate the hypergeometric enrichment p-values for all elements in the specified set
   enrichment.p.values <- c(1:length(names(enrichment.sets[[set]])))
   names(enrichment.p.values) <- names(enrichment.sets[[set]])
@@ -76,8 +78,10 @@ get.set.enrichment.scores <- function( k, set=NA) {
   }
   # Get the minimum p-value element for the enrichment analysis (assuming for the time being that no such thing as a tie). Could put a dealy here that collects all tieing top enrichments and then randomly selects the top. Adding to the stocasticity of cMonkey. Likely issues like these would sort themselves out over a run.
   min.element <- names(enrichment.p.values)[which(enrichment.p.value==min(enrichment.p.value))]
-  # Now set up the scores for all the rows:
-  #  1. Genes from the current bicluster and from the minimum element (overlap.genes) are given full log10 of the minimum element p-value
+  
+  ###   Scoring function   ###
+  # Now set up the scores for all the rows
+  if (mean(  #  1. Genes from the current bicluster and from the minimum element (overlap.genes) are given full log10 of the minimum element p-value
   #  2. Genes from the minimum element and not in the current bicluster (element.genes) are given half the log10 of the minimum element p-value
   #  3. Genes not from either the current bicluster nor the minimum element are given a zero score (i.e. no information)
   element.genes <- unique(enrichment.sets[[set]][[min.element]]
