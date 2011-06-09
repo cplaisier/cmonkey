@@ -13,256 +13,256 @@
 
 ## BIG TODO: make it so all big.memory are updated in-place
 cmonkey.one.iter <- function( env, dont.update=F, ... ) {  
-  ##if ( ! exists( "clust.changed", envir=env ) ) env$clust.changed <- rep( FALSE, k.clust )
-  if ( ! exists( "row.memb", envir=env ) ) {
-    env$row.memb <- t( apply( row.membership[], 1, function( i ) 1:k.clust %in% i ) )
-    env$col.memb <- t( apply( col.membership[], 1, function( i ) 1:k.clust %in% i ) )
-    env$row.memb <- matrix.reference( env$row.memb, backingfile="row.memb", backingpath=env$cmonkey.filename )
-    env$col.memb <- matrix.reference( env$col.memb, backingfile="col.memb", backingpath=env$cmonkey.filename )
-  } else {
-    env$row.memb[,] <- t( apply( row.membership[], 1, function( i ) 1:k.clust %in% i ) )
-    env$col.memb[,] <- t( apply( col.membership[], 1, function( i ) 1:k.clust %in% i ) )
-  }
-
-  tmp1 <- get.all.scores( ... )
-  env$row.scores <- tmp1$r ##[,];
-  env$col.scores <- tmp1$c
-  env$mot.scores <- tmp1$m
-  env$meme.scores <- tmp1$ms
-  env$net.scores <- tmp1$n
-  env$set.scores <- tmp1$se
-  if ( ! is.null( tmp1$cns ) ) env$cluster.net.scores <- tmp1$cns
-  if ( ! is.null( tmp1$cses ) ) env$cluster.set.scores <- tmp1$cses
-  rm( tmp1 )
-  
-  # Quantile normalize the scores
-  tmp2 <- get.combined.scores( quant=T )
-  env$r.scores <- tmp2$r
-  env$c.scores <- tmp2$c
-  env$m.scores <- tmp2$m
-  env$n.scores <- tmp2$n
-  env$s.scores <- tmp2$s
-  if ( ! is.null( env$row.scores ) ) attr( env$row.scores, "changed" ) <- FALSE
-  if ( ! is.null( env$col.scores ) ) attr( env$col.scores, "changed" ) <- FALSE
-  if ( ! is.null( env$mot.scores ) ) attr( env$mot.scores, "changed" ) <- FALSE
-  if ( ! is.null( env$net.scores ) ) attr( env$net.scores, "changed" ) <- FALSE
-  if ( ! is.null( env$set.scores ) ) attr( env$set.scores, "changed" ) <- FALSE
-  
-  if ( length( tmp2$scalings ) > 0 ) {
-    env$row.scaling[ iter ] <- tmp2$scalings[ "row" ]
-    env$mot.scaling[ iter ] <- tmp2$scalings[ "mot" ]
-    env$net.scaling[ iter ] <- tmp2$scalings[ "net" ]
-    env$set.scaling[ iter ] <- tmp2$scalings[ "set" ]
-  }
-  rm( tmp2 )
-
-  ## Fuzzify scores a bit for stochasticity! (fuzz should be between 0.2 and 0 (decreasing with iter)
-  if ( fuzzy.index[ iter ] > 1e-5 ) {
-    env$r.scores[,] <- env$r.scores[,] +
-      rnorm( length( env$r.scores[,] ), sd=sd( env$r.scores[,][ row.memb[,] == 1 ], na.rm=T ) * fuzzy.index[ iter ] )
-    if ( ! is.null( env$c.scores ) ) env$c.scores[,] <- env$c.scores[,] +
-      rnorm( length( env$c.scores[,] ), sd=sd( env$c.scores[,][ col.memb[,] == 1 ], na.rm=T ) * fuzzy.index[ iter ] )
-  }
-
-  tmp3 <- get.density.scores( ks=1:k.clust ) ## r.scores, col.scores, 
-  env$rr.scores <- tmp3$r
-  env$cc.scores <- tmp3$c
-  rm( tmp3 )
-
-  ## OUTPUT
-  if ( iter %in% stats.iters ) { 
-    env$clusterStack <- get.clusterStack( ks=1:k.clust ) 
-    env$stats <- rbind( stats, get.stats() )
-    cat( organism, as.matrix( stats[ nrow( stats ), ] ), '\n' )
-  } else {
-    cat( sprintf( "==> %04d %.3f %.3f %.3f\n", iter, ##%5d sum( row.memb != old.row.memb, na.rm=T ),
-                 mean( row.scores[,][ row.memb[,] == 1 ], na.rm=T ), ##mean( col.scores[ col.memb ], na.rm=T, trim=0.05 ),
-                 if ( ! is.null( mot.scores ) ) mean( mot.scores[,][ row.memb[,] == 1 & mot.scores[,] < 0 ], na.rm=T, trim=0.05 )
-                 else NA,
-                 if ( ! is.null( net.scores ) ) mean( net.scores[,][ row.memb[,] == 1 ##& net.scores < 0
-                                                                 ], na.rm=T, trim=0.05 ) else NA
-                 if ( ! is.null( set.scores ) ) mean( set.scores[,][ row.memb[,] == 1], na.rm=T, trim=0.05 ) else NA ) )
-  }
-    
-  ## NEW - will it work? -- help shrink big clusters, grow small clusters, both in rows and cols
-  size.compensation.func.rows <- function( n ) exp( -n / ( attr( ratios, "nrow" ) * n.clust.per.row / k.clust ) )
-  size.compensation.func.cols <- function( n ) exp( -n / ( attr( ratios, "ncol" ) * n.clust.per.col / k.clust ) )
-  for ( k in 1:k.clust ) {
-    tmp4 <- sum( row.memb[ ,k ] )
-    if ( tmp4 > 0 ) env$rr.scores[ ,k ] <- env$rr.scores[ ,k ] * size.compensation.func.rows( tmp4 ) 
-    else env$rr.scores[ ,k ] <- env$rr.scores[ ,k ] * size.compensation.func.rows( cluster.rows.allowed[ 1 ] )
-    if ( ! is.null( env$cc.scores ) ) {
-      tmp5 <- sum( col.memb[ ,k ] )
-      if ( tmp5 > 0 ) env$cc.scores[ ,k ] <- env$cc.scores[ ,k ] * size.compensation.func.cols( tmp5 ) 
-      else env$cc.scores[ ,k ] <- env$cc.scores[ ,k ] * size.compensation.func.cols( attr( ratios, "ncol" ) / 10 )
-    }
-  }
-  
-  ## Fuzzify it along the lines of fuzzy c-means clustering
-  ##   -- see http://en.wikipedia.org/wiki/Data_clustering#Fuzzy_c-means_clustering
-  ## No -- it doesnt affect things - same ordering (and updated memberships are based on ordering)
-  ##   but should use these scores to weight the centroids that are selected in the next iteration.
-  ##   for this, fuzz should vary between e.g. 10 and 2
-  ##rr.scores <- ( rr.scores / sum( rr.scores, na.rm=T ) )^( 2 / ( fuzz - 1 ) )
-  ##cc.scores <- ( cc.scores / sum( cc.scores, na.rm=T ) )^( 2 / ( fuzz - 1 ) )
-
-  if ( ! dont.update ) {
-  
-    ## Make a matrix of m[i,k] = whether row/col i is in cluster k
-    if ( exists( "row.membership" ) ) { 
-      env$old.row.membership <- row.membership 
-      env$old.col.membership <- col.membership 
+##if ( ! exists( "clust.changed", envir=env ) ) env$clust.changed <- rep( FALSE, k.clust )
+    if ( ! exists( "row.memb", envir=env ) ) {
+        env$row.memb <- t( apply( row.membership[], 1, function( i ) 1:k.clust %in% i ) )
+            env$col.memb <- t( apply( col.membership[], 1, function( i ) 1:k.clust %in% i ) )
+            env$row.memb <- matrix.reference( env$row.memb, backingfile="row.memb", backingpath=env$cmonkey.filename )
+            env$col.memb <- matrix.reference( env$col.memb, backingfile="col.memb", backingpath=env$cmonkey.filename )
+    } else {
+        env$row.memb[,] <- t( apply( row.membership[], 1, function( i ) 1:k.clust %in% i ) )
+            env$col.memb[,] <- t( apply( col.membership[], 1, function( i ) 1:k.clust %in% i ) )
     }
 
-    tmp6 <- get.updated.memberships() ## rr.scores, cc.scores )
-    env$row.membership <- tmp6$r
-    env$col.membership <- tmp6$c
-#ifndef PACKAGE
-    tmp6 <- filter.updated.memberships()
-#endif
-    if ( ! is.null( tmp6 ) ) { env$row.membership <- tmp$r; env$col.membership <- tmp$c }
-    
-#ifndef PACKAGE
-    if ( TRUE && iter %% 10 == sample( 0:9, 1 ) && iter < n.iter * 0.8 ) { ## Dont do this near the end of the run
-      ## Merge clusters that are dupes and then re-seed the newly-emptied ones
-      if ( merge.cutoffs[ "n" ] > 0 && merge.cutoffs[ "cor" ] < 1 ) {
-        tmp.m <- merge.cutoffs[ "n" ]; if ( tmp.m < 1 && runif( 1 ) <= tmp.m ) tmp.m <- 1
-        if ( tmp.m >= 1 ) {
-          tmp7 <- consolidate.duplicate.clusters( scores=r.scores, cor.cutoff=merge.cutoffs[ "cor" ],
-                                                n.cutoff=tmp.m, motif=F )
-          env$row.membership <- tmp7$r; env$meme.scores <- tmp7$ms
+    tmp1 <- get.all.scores( ... )
+        env$row.scores <- tmp1$r ##[,];
+    env$col.scores <- tmp1$c
+        env$mot.scores <- tmp1$m
+        env$meme.scores <- tmp1$ms
+        env$net.scores <- tmp1$n
+        env$set.scores <- tmp1$se
+        if ( ! is.null( tmp1$cns ) ) env$cluster.net.scores <- tmp1$cns
+            if ( ! is.null( tmp1$cses ) ) env$cluster.set.scores <- tmp1$cses
+                rm( tmp1 )
+
+# Quantile normalize the scores
+                    tmp2 <- get.combined.scores( quant=T )
+                    env$r.scores <- tmp2$r
+                    env$c.scores <- tmp2$c
+                    env$m.scores <- tmp2$m
+                    env$n.scores <- tmp2$n
+                    env$s.scores <- tmp2$s
+                    if ( ! is.null( env$row.scores ) ) attr( env$row.scores, "changed" ) <- FALSE
+                        if ( ! is.null( env$col.scores ) ) attr( env$col.scores, "changed" ) <- FALSE
+                            if ( ! is.null( env$mot.scores ) ) attr( env$mot.scores, "changed" ) <- FALSE
+                                if ( ! is.null( env$net.scores ) ) attr( env$net.scores, "changed" ) <- FALSE
+                                    if ( ! is.null( env$set.scores ) ) attr( env$set.scores, "changed" ) <- FALSE
+
+                                        if ( length( tmp2$scalings ) > 0 ) {
+                                            env$row.scaling[ iter ] <- tmp2$scalings[ "row" ]
+                                                env$mot.scaling[ iter ] <- tmp2$scalings[ "mot" ]
+                                                env$net.scaling[ iter ] <- tmp2$scalings[ "net" ]
+                                                env$set.scaling[ iter ] <- tmp2$scalings[ "set" ]
+                                        }
+    rm( tmp2 )
+
+## Fuzzify scores a bit for stochasticity! (fuzz should be between 0.2 and 0 (decreasing with iter)
+        if ( fuzzy.index[ iter ] > 1e-5 ) {
+        env$r.scores[,] <- env$r.scores[,] +
+        rnorm( length( env$r.scores[,] ), sd=sd( env$r.scores[,][ row.memb[,] == 1 ], na.rm=T ) * fuzzy.index[ iter ] )
+        if ( ! is.null( env$c.scores ) ) env$c.scores[,] <- env$c.scores[,] +
+        rnorm( length( env$c.scores[,] ), sd=sd( env$c.scores[,][ col.memb[,] == 1 ], na.rm=T ) * fuzzy.index[ iter ] )
         }
-      }
-      
-      ## Re-seed that are too small (including those zero-ed out by the dupe-consolidation above)
-      tmp8 <- re.seed.empty.clusters( toosmall.r=cluster.rows.allowed[ 1 ],
-                                    toosmall.c=min(attr(ratios,"ncol")/10,50),
-                                    n.r=cluster.rows.allowed[ 1 ] * 2, n.c=attr(ratios,"ncol")/5 )
-      env$row.membership <- tmp8$r; env$col.membership <- tmp8$c; env$meme.scores <- tmp8$ms 
-    }
-  ## }
-#endif
-    
-    ## PLOTTING
-    if ( ! is.na( plot.iters ) && iter %in% plot.iters ) {
-      env$clusterStack <- get.clusterStack( ks=1:k.clust ) 
-      try( plotStats( iter, plot.clust=env$favorite.cluster(), new.dev=T ), silent=T ) ## Can be set for your given organism
-    }
-  
-    if ( exists( "cm.func.each.iter" ) ) try( cm.func.each.iter(), silent=T ) ## User-defined func. to run each iteration
-    
-    ## Allow temp source file to be sourced (e.g. to change a param in the middle of a run, or print or plot or save
-    ## some intermediate results). If first line of file is '## QUIET' then this is done quietly.
-    if ( any( cm.script.each.iter != "" ) ) {
-      for ( f in cm.script.each.iter ) {
-        if ( file.exists( f ) && file.info( f )$size > 1 ) {
-          tmp9 <- readLines( f )
-          if ( all( substr( tmp9, 1, 1 ) == "#" ) ) next ## All commented-out code
-          if ( tmp9[ 1 ] != "## QUIET" ) cat( "Sourcing the script '", f, "' ...\n", sep="" )
-          try( source( f, echo=tmp9[ 1 ] != "## QUIET", local=T ), silent=T )
+
+        tmp3 <- get.density.scores( ks=1:k.clust ) ## r.scores, col.scores, 
+        env$rr.scores <- tmp3$r
+        env$cc.scores <- tmp3$c
+        rm( tmp3 )
+
+## OUTPUT
+        if ( iter %in% stats.iters ) { 
+        env$clusterStack <- get.clusterStack( ks=1:k.clust ) 
+        env$stats <- rbind( stats, get.stats() )
+        cat( organism, as.matrix( stats[ nrow( stats ), ] ), '\n' )
+        } else {
+        cat( sprintf( "==> %04d %.3f %.3f %.3f\n", iter, ##%5d sum( row.memb != old.row.memb, na.rm=T ),
+                mean( row.scores[,][ row.memb[,] == 1 ], na.rm=T ), ##mean( col.scores[ col.memb ], na.rm=T, trim=0.05 ),
+                if ( ! is.null( mot.scores ) ) mean( mot.scores[,][ row.memb[,] == 1 & mot.scores[,] < 0 ], na.rm=T, trim=0.05 )
+                else NA,
+                if ( ! is.null( net.scores ) ) mean( net.scores[,][ row.memb[,] == 1 ##& net.scores < 0
+                    ], na.rm=T, trim=0.05 ) else NA,
+                if ( ! is.null( set.scores ) ) mean( set.scores[,][ row.memb[,] == 1], na.rm=T, trim=0.05 ) else NA ) )
         }
-      }
-    }
-  }
+
+## NEW - will it work? -- help shrink big clusters, grow small clusters, both in rows and cols
+    size.compensation.func.rows <- function( n ) exp( -n / ( attr( ratios, "nrow" ) * n.clust.per.row / k.clust ) )
+        size.compensation.func.cols <- function( n ) exp( -n / ( attr( ratios, "ncol" ) * n.clust.per.col / k.clust ) )
+        for ( k in 1:k.clust ) {
+            tmp4 <- sum( row.memb[ ,k ] )
+                if ( tmp4 > 0 ) env$rr.scores[ ,k ] <- env$rr.scores[ ,k ] * size.compensation.func.rows( tmp4 ) 
+                else env$rr.scores[ ,k ] <- env$rr.scores[ ,k ] * size.compensation.func.rows( cluster.rows.allowed[ 1 ] )
+                    if ( ! is.null( env$cc.scores ) ) {
+                        tmp5 <- sum( col.memb[ ,k ] )
+                            if ( tmp5 > 0 ) env$cc.scores[ ,k ] <- env$cc.scores[ ,k ] * size.compensation.func.cols( tmp5 ) 
+                            else env$cc.scores[ ,k ] <- env$cc.scores[ ,k ] * size.compensation.func.cols( attr( ratios, "ncol" ) / 10 )
+                    }
+        }
+
+## Fuzzify it along the lines of fuzzy c-means clustering
+##   -- see http://en.wikipedia.org/wiki/Data_clustering#Fuzzy_c-means_clustering
+## No -- it doesnt affect things - same ordering (and updated memberships are based on ordering)
+##   but should use these scores to weight the centroids that are selected in the next iteration.
+##   for this, fuzz should vary between e.g. 10 and 2
+##rr.scores <- ( rr.scores / sum( rr.scores, na.rm=T ) )^( 2 / ( fuzz - 1 ) )
+##cc.scores <- ( cc.scores / sum( cc.scores, na.rm=T ) )^( 2 / ( fuzz - 1 ) )
+
+    if ( ! dont.update ) {
+
+## Make a matrix of m[i,k] = whether row/col i is in cluster k
+        if ( exists( "row.membership" ) ) { 
+            env$old.row.membership <- row.membership 
+                env$old.col.membership <- col.membership 
+        }
+
+        tmp6 <- get.updated.memberships() ## rr.scores, cc.scores )
+            env$row.membership <- tmp6$r
+            env$col.membership <- tmp6$c
+#ifndef PACKAGE
+            tmp6 <- filter.updated.memberships()
+#endif
+            if ( ! is.null( tmp6 ) ) { env$row.membership <- tmp$r; env$col.membership <- tmp$c }
 
 #ifndef PACKAGE
-  ##if ( big.memory == TRUE || big.memory > 0 )
-  ##ffify.env( env ) ## Big matrices and lists go to filebacked version
+        if ( TRUE && iter %% 10 == sample( 0:9, 1 ) && iter < n.iter * 0.8 ) { ## Dont do this near the end of the run
+## Merge clusters that are dupes and then re-seed the newly-emptied ones
+            if ( merge.cutoffs[ "n" ] > 0 && merge.cutoffs[ "cor" ] < 1 ) {
+                tmp.m <- merge.cutoffs[ "n" ]; if ( tmp.m < 1 && runif( 1 ) <= tmp.m ) tmp.m <- 1
+                    if ( tmp.m >= 1 ) {
+                        tmp7 <- consolidate.duplicate.clusters( scores=r.scores, cor.cutoff=merge.cutoffs[ "cor" ],
+                                n.cutoff=tmp.m, motif=F )
+                            env$row.membership <- tmp7$r; env$meme.scores <- tmp7$ms
+                    }
+            }
+
+## Re-seed that are too small (including those zero-ed out by the dupe-consolidation above)
+            tmp8 <- re.seed.empty.clusters( toosmall.r=cluster.rows.allowed[ 1 ],
+                    toosmall.c=min(attr(ratios,"ncol")/10,50),
+                    n.r=cluster.rows.allowed[ 1 ] * 2, n.c=attr(ratios,"ncol")/5 )
+                env$row.membership <- tmp8$r; env$col.membership <- tmp8$c; env$meme.scores <- tmp8$ms 
+        }
+## }
 #endif
-  
-  ## Note: with the above code, when the env is saved via save.image(), all ff obj's are "closed" but their
-  ##   filestores still exist, so you can "open.ff(x)" each of them after the env is re-loaded,
-  ##   and that will reconnect them with their files.
-  
-  if ( get.parallel()$mc ) {
+
+## PLOTTING
+        if ( ! is.na( plot.iters ) && iter %in% plot.iters ) {
+            env$clusterStack <- get.clusterStack( ks=1:k.clust ) 
+                try( plotStats( iter, plot.clust=env$favorite.cluster(), new.dev=T ), silent=T ) ## Can be set for your given organism
+        }
+
+        if ( exists( "cm.func.each.iter" ) ) try( cm.func.each.iter(), silent=T ) ## User-defined func. to run each iteration
+
+## Allow temp source file to be sourced (e.g. to change a param in the middle of a run, or print or plot or save
+## some intermediate results). If first line of file is '## QUIET' then this is done quietly.
+            if ( any( cm.script.each.iter != "" ) ) {
+                for ( f in cm.script.each.iter ) {
+                    if ( file.exists( f ) && file.info( f )$size > 1 ) {
+                        tmp9 <- readLines( f )
+                            if ( all( substr( tmp9, 1, 1 ) == "#" ) ) next ## All commented-out code
+                                if ( tmp9[ 1 ] != "## QUIET" ) cat( "Sourcing the script '", f, "' ...\n", sep="" )
+                                    try( source( f, echo=tmp9[ 1 ] != "## QUIET", local=T ), silent=T )
+                    }
+                }
+            }
+}
+
+#ifndef PACKAGE
+##if ( big.memory == TRUE || big.memory > 0 )
+##ffify.env( env ) ## Big matrices and lists go to filebacked version
+#endif
+
+## Note: with the above code, when the env is saved via save.image(), all ff obj's are "closed" but their
+##   filestores still exist, so you can "open.ff(x)" each of them after the env is re-loaded,
+##   and that will reconnect them with their files.
+
+if ( get.parallel()$mc ) {
     if ( getDoParName() == "doMC" ) { ##require( multicore, quietly=T ) ) { ## Clean up any multicore spawned processes (as doc'ed in mclapply help)
-      chld <- multicore::children()
-      if ( length( chld ) > 0 ) { try( { multicore::kill( chld ); tmp10 <- multicore::collect( chld ) }, silent=T ) }
+        chld <- multicore::children()
+            if ( length( chld ) > 0 ) { try( { multicore::kill( chld ); tmp10 <- multicore::collect( chld ) }, silent=T ) }
     } else if ( getDoParName() == "doSNOW" && "data" %in% ls( pos=foreach:::.foreachGlobals ) ) {
-      cl <- get( "data", pos=foreach:::.foreachGlobals ) ## Tricky, eh?
-      if ( ! is.null( data ) ) stopCluster( cl )
+        cl <- get( "data", pos=foreach:::.foreachGlobals ) ## Tricky, eh?
+            if ( ! is.null( data ) ) stopCluster( cl )
     }
-  }
-  
-  if ( ! dont.update ) env$iter <- env$iter + 1
-  invisible( env )
+    }
+
+    if ( ! dont.update ) env$iter <- env$iter + 1
+        invisible( env )
 }
 
 ## TODO: store/plot indiv. resids and network scores for each separate component
 get.stats <- function( mean.func=median ) {
-  ##if ( ! exists( "row.memb" ) ) row.memb <- t( apply( row.membership, 1, function( i ) 1:k.clust %in% i ) )
-  ##if ( ! exists( "col.memb" ) ) col.memb <- t( apply( col.membership, 1, function( i ) 1:k.clust %in% i ) )
-  changed <- NA
-  if ( ! is.null( old.row.membership ) )
-    changed <- sum( row.memb[,] != t( apply( old.row.membership, 1, function( i ) 1:k.clust %in% i ) ), na.rm=T )
+##if ( ! exists( "row.memb" ) ) row.memb <- t( apply( row.membership, 1, function( i ) 1:k.clust %in% i ) )
+##if ( ! exists( "col.memb" ) ) col.memb <- t( apply( col.membership, 1, function( i ) 1:k.clust %in% i ) )
+    changed <- NA
+        if ( ! is.null( old.row.membership ) )
+            changed <- sum( row.memb[,] != t( apply( old.row.membership, 1, function( i ) 1:k.clust %in% i ) ), na.rm=T )
 
-  cs <- as.list( clusterStack )
-  resids <- sapply( cs, "[[", "resid" )
-  if ( is.matrix( resids ) ) resids <- apply( resids, 1, function( r ) mean.func( r[ r != 1.0 ], na.rm=T ) )
-  else resids <- mean.func( resids[ resids != 1.0 ], na.rm=T )
-  p.clusts <- sapply( cs, "[[", "p.clust" )
-  if ( is.matrix( p.clusts ) ) p.clusts <- apply( p.clusts, 1, mean.func, na.rm=T ) 
-  else p.clusts <- mean.func( p.clusts, na.rm=T )
-  out <- data.frame( iter=iter, changed=changed,
-             row.scores=mean( row.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ),
-             col.scores=mean( col.scores[,][ col.memb[,] == 1 ], na.rm=T, trim=0.05 ),
-             mot.scores=if ( ! is.null( mot.scores ) ) mean.func( mot.scores[,][ row.memb[,] == 1 ], na.rm=T ) else NA, 
-             net.scores=if ( ! is.null( net.scores ) ) mean( net.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ) else NA,
-             set.scores=if ( ! is.null( set.scores ) ) mean( set.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ) else NA,
-             resid=weighted.mean( resids, row.weights, na.rm=T ),
-             nrow=mean.func( sapply( cs, "[[", "nrows" ), na.rm=T ),
-             ncol=mean.func( sapply( cs, "[[", "ncols" ), na.rm=T ),
-             p.clust=if ( ! all( is.na( p.clusts ) ) ) weighted.mean( p.clusts, mot.weights, na.rm=T ) else NA
-             )
-  if ( length( resids ) > 1 ) for ( i in names( resids ) ) {
-    out <- cbind( out, resids[ i ] )
-    names( out )[ ncol( out ) ] <- paste( "resid", i, sep="." )
-  }
-  if ( length( p.clusts ) > 1 ) for ( i in names( p.clusts ) ) {
-    out <- cbind( out, p.clusts[ i ] )
-    names( out )[ ncol( out ) ] <- paste( "p.clust", i, sep="." )
-  }
-  ## net.scores weighted by n.rows of bicluster
-  if ( length( networks ) > 1 ) {
-    for ( i in names( net.weights ) ) {
-      if ( exists( "cluster.net.scores" ) && i %in% colnames( cluster.net.scores ) )
-        out <- cbind( out, weighted.mean( cluster.net.scores[ ,i ], sapply( cs, "[[", "nrows" ), na.rm=T ) )
-      else out <- cbind( out, rep( NA, nrow( out ) ) )
-      names( out )[ ncol( out ) ] <- paste( "net", i, sep="." )
+                cs <- as.list( clusterStack )
+                resids <- sapply( cs, "[[", "resid" )
+                if ( is.matrix( resids ) ) resids <- apply( resids, 1, function( r ) mean.func( r[ r != 1.0 ], na.rm=T ) )
+                else resids <- mean.func( resids[ resids != 1.0 ], na.rm=T )
+                    p.clusts <- sapply( cs, "[[", "p.clust" )
+                        if ( is.matrix( p.clusts ) ) p.clusts <- apply( p.clusts, 1, mean.func, na.rm=T ) 
+                        else p.clusts <- mean.func( p.clusts, na.rm=T )
+                            out <- data.frame( iter=iter, changed=changed,
+                                    row.scores=mean( row.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ),
+                                    col.scores=mean( col.scores[,][ col.memb[,] == 1 ], na.rm=T, trim=0.05 ),
+                                    mot.scores=if ( ! is.null( mot.scores ) ) mean.func( mot.scores[,][ row.memb[,] == 1 ], na.rm=T ) else NA, 
+                                    net.scores=if ( ! is.null( net.scores ) ) mean( net.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ) else NA,
+                                    set.scores=if ( ! is.null( set.scores ) ) mean( set.scores[,][ row.memb[,] == 1 ], na.rm=T, trim=0.05 ) else NA,
+                                    resid=weighted.mean( resids, row.weights, na.rm=T ),
+                                    nrow=mean.func( sapply( cs, "[[", "nrows" ), na.rm=T ),
+                                    ncol=mean.func( sapply( cs, "[[", "ncols" ), na.rm=T ),
+                                    p.clust=if ( ! all( is.na( p.clusts ) ) ) weighted.mean( p.clusts, mot.weights, na.rm=T ) else NA
+                                    )
+                                if ( length( resids ) > 1 ) for ( i in names( resids ) ) {
+                                    out <- cbind( out, resids[ i ] )
+                                        names( out )[ ncol( out ) ] <- paste( "resid", i, sep="." )
+                                }
+    if ( length( p.clusts ) > 1 ) for ( i in names( p.clusts ) ) {
+        out <- cbind( out, p.clusts[ i ] )
+            names( out )[ ncol( out ) ] <- paste( "p.clust", i, sep="." )
     }
-    if ( exists( "cluster.net.scores" ) && "net.scores" %in% colnames( cluster.net.scores ) )
-      out[ ,"net.scores" ] <- weighted.mean( cluster.net.scores[ ,"net.scores" ],
-                                            sapply( cs, "[[", "nrows" ), na.rm=T )
-  }
-  ## set.scores weighted by n.rows of bicluster
-  if ( length( enrichment.sets ) > 1 ) {
-    for ( i in names( set.weights ) ) {
-      if ( exists( "cluster.set.scores" ) && i %in% colnames( cluster.set.scores ) ) {
-        out <- cbind( out, weighted.mean( cluster.set.scores[ ,i ], sapply( cs, "[[", "nrows" ), na.rm=T ) )
-      } else {
-        out <- cbind( out, rep( NA, nrow( out ) ) )
-      }
-      names( out )[ ncol( out ) ] <- paste( "set", i, sep="." )
+## net.scores weighted by n.rows of bicluster
+    if ( length( networks ) > 1 ) {
+        for ( i in names( net.weights ) ) {
+            if ( exists( "cluster.net.scores" ) && i %in% colnames( cluster.net.scores ) )
+                out <- cbind( out, weighted.mean( cluster.net.scores[ ,i ], sapply( cs, "[[", "nrows" ), na.rm=T ) )
+            else out <- cbind( out, rep( NA, nrow( out ) ) )
+                names( out )[ ncol( out ) ] <- paste( "net", i, sep="." )
+        }
+        if ( exists( "cluster.net.scores" ) && "net.scores" %in% colnames( cluster.net.scores ) )
+            out[ ,"net.scores" ] <- weighted.mean( cluster.net.scores[ ,"net.scores" ],
+                    sapply( cs, "[[", "nrows" ), na.rm=T )
     }
-    if ( exists( "cluster.set.scores" ) && "set.scores" %in% colnames( cluster.set.scores ) ) {
-      out[ ,"set.scores" ] <- weighted.mean( cluster.set.scores[ ,"set.scores" ], sapply( cs, "[[", "nrows" ), na.rm=T )
+## set.scores weighted by n.rows of bicluster
+    if ( length( enrichment.sets ) > 1 ) {
+        for ( i in names( set.weights ) ) {
+            if ( exists( "cluster.set.scores" ) && i %in% colnames( cluster.set.scores ) ) {
+                out <- cbind( out, weighted.mean( cluster.set.scores[ ,i ], sapply( cs, "[[", "nrows" ), na.rm=T ) )
+            } else {
+                out <- cbind( out, rep( NA, nrow( out ) ) )
+            }
+            names( out )[ ncol( out ) ] <- paste( "set", i, sep="." )
+        }
+        if ( exists( "cluster.set.scores" ) && "set.scores" %in% colnames( cluster.set.scores ) ) {
+            out[ ,"set.scores" ] <- weighted.mean( cluster.set.scores[ ,"set.scores" ], sapply( cs, "[[", "nrows" ), na.rm=T )
+        }
     }
-  }
-  out
+    out
 }
 
 ## Only override global parameters if they were not already set previously ----
 ##   but even if they were, copy them into the 'cmonkey.params' environment
 set.param <- function( name, val, env=cmonkey.params, override=F, quiet=F ) {
-  if ( ! exists( name, envir=env ) || override ) {
-    if ( ! quiet ) try( { cat( name, "-> " ); str( val, digits.d=9, no.list=T ) } )
-    assign( name, val, envir=env )
-  } else {
-    val <- get( name, envir=env )
-    if ( ! quiet ) try( { cat( name, "= " ); str( val, digits.d=9, no.list=T ) } ) 
-    assign( name, val, envir=env )
-  }
-  assign( name, val, envir=parent.frame() )
+    if ( ! exists( name, envir=env ) || override ) {
+        if ( ! quiet ) try( { cat( name, "-> " ); str( val, digits.d=9, no.list=T ) } )
+            assign( name, val, envir=env )
+    } else {
+        val <- get( name, envir=env )
+            if ( ! quiet ) try( { cat( name, "= " ); str( val, digits.d=9, no.list=T ) } ) 
+                assign( name, val, envir=env )
+    }
+    assign( name, val, envir=parent.frame() )
 }
 
 ## Make sure all processes are killed via kill(children(),SIGKILL) ??
@@ -274,287 +274,287 @@ set.param <- function( name, val, env=cmonkey.params, override=F, quiet=F ) {
 
 ##is.windows.system <- function() FALSE
 
-foreach.register.backend <- function( par ) { ##, force.snow=is.windows.system() ) {
-  if ( ! require( foreach ) ) return( NULL )
-  if ( par > 1 && require( doMC, quietly=T ) ) registerDoMC( cores=par )
-  ##if ( par == 1 ) { registerDoSEQ(); return( NULL ) }
-  ##if ( ! is.windows.system() && ! force.snow ) {
-  ## else if require( doSNOW ) {
-  ##  if ( ! "data" %in% ls( pos=foreach:::.foreachGlobals ) ) {
-  ##    cl <- makeCluster( rep( 'localhost', par ), "SOCK" )
-  ##    registerDoSNOW( cl )
-  ##  }
-  ##}
-  else registerDoSEQ()
+    foreach.register.backend <- function( par ) { ##, force.snow=is.windows.system() ) {
+        if ( ! require( foreach ) ) return( NULL )
+            if ( par > 1 && require( doMC, quietly=T ) ) registerDoMC( cores=par )
+##if ( par == 1 ) { registerDoSEQ(); return( NULL ) }
+##if ( ! is.windows.system() && ! force.snow ) {
+## else if require( doSNOW ) {
+##  if ( ! "data" %in% ls( pos=foreach:::.foreachGlobals ) ) {
+##    cl <- makeCluster( rep( 'localhost', par ), "SOCK" )
+##    registerDoSNOW( cl )
+##  }
+##}
+    else registerDoSEQ()
 }
 
 get.parallel <- function( X=k.clust, verbose=F, para.cores=get( "parallel.cores" ) ) {
-  if ( is.na( para.cores ) || ( is.logical( para.cores ) && para.cores == FALSE ) ||
-      ( is.numeric( para.cores ) && para.cores <= 1 ) ) {
-    out <- list( mc=FALSE, par=para.cores, apply=lapply )
-    if ( verbose ) cat( "NOT PARALLELIZING\n" )
-  } else {
-    try( has.multi <- require( multicore, quietly=T ), silent=T )
-    if ( ! has.multi || ( has.multi && multicore:::isChild() ) ) {    
-      out <- list( mc=FALSE, par=para.cores, apply=lapply )
-      if ( verbose ) cat( "NOT PARALLELIZING\n" )
+    if ( is.na( para.cores ) || ( is.logical( para.cores ) && para.cores == FALSE ) ||
+            ( is.numeric( para.cores ) && para.cores <= 1 ) ) {
+        out <- list( mc=FALSE, par=para.cores, apply=lapply )
+            if ( verbose ) cat( "NOT PARALLELIZING\n" )
     } else {
-      mc <- has.multi && ! multicore:::isChild() && X > 1 && ! is.na( para.cores ) &&
-      ( is.numeric( para.cores ) && para.cores > 1 ) ||
-      ( is.logical( para.cores ) && para.cores == TRUE )
-      par <- para.cores
-      out.apply <- lapply 
-      if ( mc ) {
-        if ( is.logical( par ) && par == TRUE ) par <- multicore:::detectCores() ## all.tests=TRUE )
-        par <- min( c( X, par, multicore:::detectCores() ) ) ## all.tests=TRUE ) ) )
-        if ( verbose ) cat( "PARALLELIZING:", par, ": " )
-        ## if ( ! exists( "foreach.register.backend" ) || is.null( foreach.register.backend ) ||
-        ##     is.null( foreach.register.backend( par ) ) ) { ##use.foreach ) {
-        ##   out.apply <- mclapply
-        ## } else {
-        foreach.register.backend( par )
+        try( has.multi <- require( multicore, quietly=T ), silent=T )
+            if ( ! has.multi || ( has.multi && multicore:::isChild() ) ) {    
+                out <- list( mc=FALSE, par=para.cores, apply=lapply )
+                    if ( verbose ) cat( "NOT PARALLELIZING\n" )
+            } else {
+                mc <- has.multi && ! multicore:::isChild() && X > 1 && ! is.na( para.cores ) &&
+                    ( is.numeric( para.cores ) && para.cores > 1 ) ||
+                    ( is.logical( para.cores ) && para.cores == TRUE )
+                    par <- para.cores
+                    out.apply <- lapply 
+                    if ( mc ) {
+                        if ( is.logical( par ) && par == TRUE ) par <- multicore:::detectCores() ## all.tests=TRUE )
+                            par <- min( c( X, par, multicore:::detectCores() ) ) ## all.tests=TRUE ) ) )
+                                if ( verbose ) cat( "PARALLELIZING:", par, ": " )
+## if ( ! exists( "foreach.register.backend" ) || is.null( foreach.register.backend ) ||
+##     is.null( foreach.register.backend( par ) ) ) { ##use.foreach ) {
+##   out.apply <- mclapply
+## } else {
+    foreach.register.backend( par )
         if ( verbose ) cat( getDoParName(), getDoParWorkers(), "\n" )
-        out.apply <- function( list, FUN, ... ) foreach( l=list ) %dopar% { FUN( l, ... ) }
-        ## }
-        ##if ( attr( ratios, "nrow" ) > big.run ) print( gc() ) ## gc() before we spawn new copied processes
-      } else {
-        par <- 1
+            out.apply <- function( list, FUN, ... ) foreach( l=list ) %dopar% { FUN( l, ... ) }
+## }
+##if ( attr( ratios, "nrow" ) > big.run ) print( gc() ) ## gc() before we spawn new copied processes
+} else {
+    par <- 1
         if ( verbose ) cat( "NOT PARALLELIZING:", par, "\n" )
-      }
-      out <- list( mc=mc, par=par, apply=out.apply )
-    }
-  }
-  ##if ( attr( ratios, "nrow" ) > big.run ) print( gc() ) ## gc() before we spawn new copied processes
-  if ( is.numeric( out$par ) && ! is.na( out$par ) ) options( cores=out$par ) ## getOption("cores") is the default of how mclapply gets its mc.cores number
-  else if ( is.na( out$par ) || ( is.logical( out$par ) && out$par == TRUE ) ) options( cores=NULL )
-  else options( cores=1 )
-  out
 }
+out <- list( mc=mc, par=par, apply=out.apply )
+    }
+}
+##if ( attr( ratios, "nrow" ) > big.run ) print( gc() ) ## gc() before we spawn new copied processes
+    if ( is.numeric( out$par ) && ! is.na( out$par ) ) options( cores=out$par ) ## getOption("cores") is the default of how mclapply gets its mc.cores number
+    else if ( is.na( out$par ) || ( is.logical( out$par ) && out$par == TRUE ) ) options( cores=NULL )
+else options( cores=1 )
+    out
+    }
 
 ## Quick and dirty quantile normalization of scores matrices against each other!!!
 ## Optionally weight the scores matrices!!!
 quantile.normalize.scores <- function( scores, weights=NULL, keep.nas=F ) {
-  ## scores is a list of matrices of same dimension
-  if ( ! is.list( scores ) || sum( ! sapply( scores, is.null ) ) <= 1 ) return( scores )
-  scores <- scores[ ! sapply( scores, is.null ) ]
-  ##ns <- names( scores )
-  d <- dim( scores[[ 1 ]] )
-  dn <- dimnames( scores[[ 1 ]] )
-  ##scores <- sapply( scores, function( s ) as.vector( s[,] ) )
-  ##tmp <- apply( scores, 2, rank, ties="min", na="keep" )
-  ##tmp2 <- apply( scores, 2, sort, na.last=T ) ##sapply( 1:ncol( scores ), function( i ) scores[ tmp[ ,i ], i ] )
-  tmp2 <- sapply( scores, function( i ) sort( i[,], na.last=T ) ) ##sapply( 1:ncol( scores ), function( i ) scores[ tmp[ ,i ], i ] )
-  if ( is.null( weights ) ) tmp2.mn <- rowMeans( tmp2, na.rm=T )
-  else { ##tmp2.mn <- apply( tmp2, 1, weighted.mean, weights, na.rm=T )
-    for ( i in 1:ncol( tmp2 ) ) tmp2[ ,i ] <- tmp2[ ,i ] * weights[ i ]
-    tmp2.mn <- rowMeans( tmp2, na.rm=T ) / sum( weights, na.rm=T )
-  }
-  rm( tmp2 )
-  ##out <- lapply( 1:ncol( scores ), function( i ) tmp2.mn[ tmp[ ,i ] ] )
-  ##out <- lapply( out, function( i ) { z <- matrix( i, nrow=d[ 1 ], ncol=d[ 2 ] ); dimnames( z ) <- dn; z } ) 
-  ##names( out ) <- ns
-  ##out
-  ##tmp <- sapply( scores, function( i ) rank( i[,], ties="min", na="keep" ) )
-  out <- list()
-  for ( n in names( scores ) ) {
-    tmp <- rank( scores[[ n ]][,], ties="min", na="keep" )
-    ##scores[[ n ]][,] <-
-    z <- matrix( tmp2.mn[ tmp ], nrow=d[ 1 ], ncol=d[ 2 ] ) ##tmp[ ,n ] ]
-    dimnames( z ) <- dn
-    if ( keep.nas ) z[ is.na( scores[[ n ]][,] ) ] <- NA
-    out[[ n ]] <- z
-  }
-  out ##scores
+## scores is a list of matrices of same dimension
+    if ( ! is.list( scores ) || sum( ! sapply( scores, is.null ) ) <= 1 ) return( scores )
+        scores <- scores[ ! sapply( scores, is.null ) ]
+##ns <- names( scores )
+            d <- dim( scores[[ 1 ]] )
+            dn <- dimnames( scores[[ 1 ]] )
+##scores <- sapply( scores, function( s ) as.vector( s[,] ) )
+##tmp <- apply( scores, 2, rank, ties="min", na="keep" )
+##tmp2 <- apply( scores, 2, sort, na.last=T ) ##sapply( 1:ncol( scores ), function( i ) scores[ tmp[ ,i ], i ] )
+            tmp2 <- sapply( scores, function( i ) sort( i[,], na.last=T ) ) ##sapply( 1:ncol( scores ), function( i ) scores[ tmp[ ,i ], i ] )
+            if ( is.null( weights ) ) tmp2.mn <- rowMeans( tmp2, na.rm=T )
+            else { ##tmp2.mn <- apply( tmp2, 1, weighted.mean, weights, na.rm=T )
+                for ( i in 1:ncol( tmp2 ) ) tmp2[ ,i ] <- tmp2[ ,i ] * weights[ i ]
+                    tmp2.mn <- rowMeans( tmp2, na.rm=T ) / sum( weights, na.rm=T )
+            }
+    rm( tmp2 )
+##out <- lapply( 1:ncol( scores ), function( i ) tmp2.mn[ tmp[ ,i ] ] )
+##out <- lapply( out, function( i ) { z <- matrix( i, nrow=d[ 1 ], ncol=d[ 2 ] ); dimnames( z ) <- dn; z } ) 
+##names( out ) <- ns
+##out
+##tmp <- sapply( scores, function( i ) rank( i[,], ties="min", na="keep" ) )
+        out <- list()
+        for ( n in names( scores ) ) {
+            tmp <- rank( scores[[ n ]][,], ties="min", na="keep" )
+##scores[[ n ]][,] <-
+                z <- matrix( tmp2.mn[ tmp ], nrow=d[ 1 ], ncol=d[ 2 ] ) ##tmp[ ,n ] ]
+                dimnames( z ) <- dn
+                if ( keep.nas ) z[ is.na( scores[[ n ]][,] ) ] <- NA
+                    out[[ n ]] <- z
+        }
+    out ##scores
 }
 
 get.all.scores <- function( ks=1:k.clust, force.row=F, force.col=F, force.motif=F, force.net=F, force.set=F,
-                           quantile.normalize=T ) {
-  mc <- get.parallel( length( ks ) )
+        quantile.normalize=T ) {
+    mc <- get.parallel( length( ks ) )
 
-  ## Compute row.scores (microarray data)
-  if ( force.row || ( row.scaling[ iter ] > 0 && ! is.na( row.iters[ 1 ] ) && iter %in% row.iters ) ) {
-    ##if ( ! exists( "row.scores" ) || is.null( row.scores ) || nrow( row.scores ) != attr( ratios, "nrow" ) ||
-    ##    ncol( row.scores ) != max( ks ) ) {
+## Compute row.scores (microarray data)
+        if ( force.row || ( row.scaling[ iter ] > 0 && ! is.na( row.iters[ 1 ] ) && iter %in% row.iters ) ) {
+##if ( ! exists( "row.scores" ) || is.null( row.scores ) || nrow( row.scores ) != attr( ratios, "nrow" ) ||
+##    ncol( row.scores ) != max( ks ) ) {
     if ( is.null( row.scores ) ) {
-      row.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) )
-      rownames( row.scores ) <- attr( ratios, "rnames" )
-      row.scores <- matrix.reference( row.scores )
+        row.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) )
+            rownames( row.scores ) <- attr( ratios, "rnames" )
+            row.scores <- matrix.reference( row.scores )
     } else row.scores[ ,ks ] <- 0
-    ## TODO: Try to quantile normalize the ratios scores too (as is done w/ mot.scores, net.scores below) but
-    ##    this is harder because each different "tmp.row" matrix may have different nrows.
-    ##rs.func <- function() { ## for profiling
+## TODO: Try to quantile normalize the ratios scores too (as is done w/ mot.scores, net.scores below) but
+##    this is harder because each different "tmp.row" matrix may have different nrows.
+##rs.func <- function() { ## for profiling
     for ( i in names( ratios ) ) { 
-      if ( row.weights[ i ] == 0 || is.na( row.weights[ i ] ) ) next
-      tmp.row <- do.call( cbind, mc$apply( ks, get.row.scores, ratios=ratios[[ i ]]
+        if ( row.weights[ i ] == 0 || is.na( row.weights[ i ] ) ) next
+            tmp.row <- do.call( cbind, mc$apply( ks, get.row.scores, ratios=ratios[[ i ]]
 #ifndef PACKAGE
-                                          , method=row.score.func
+                        , method=row.score.func
 #endif
-                                          ) )
-      tmp <- is.infinite( tmp.row ) | is.na( tmp.row )
-      if ( any( tmp ) ) tmp.row[ tmp ] <-
-        quantile( tmp.row[ row.memb[,][ rownames( tmp.row ), ] == 1 & ! tmp ], 0.95 ) ##0 ## No measurement is NOT an NA - it is an observation
-      tmp <- rownames( row.scores )[ rownames( row.scores ) %in% rownames( tmp.row ) ]
-      row.scores[ tmp, ks ] <- row.scores[ tmp, ks ] + tmp.row[ tmp, ] * row.weights[ i ]
-      rm( tmp.row, tmp )
+                        ) )
+                tmp <- is.infinite( tmp.row ) | is.na( tmp.row )
+                if ( any( tmp ) ) tmp.row[ tmp ] <-
+                    quantile( tmp.row[ row.memb[,][ rownames( tmp.row ), ] == 1 & ! tmp ], 0.95 ) ##0 ## No measurement is NOT an NA - it is an observation
+                        tmp <- rownames( row.scores )[ rownames( row.scores ) %in% rownames( tmp.row ) ]
+                        row.scores[ tmp, ks ] <- row.scores[ tmp, ks ] + tmp.row[ tmp, ] * row.weights[ i ]
+                        rm( tmp.row, tmp )
     }
     attr( row.scores, "changed" ) <- TRUE
-    ##row.scores }; row.scores <- rs.func()    
-  }
-  
-  ## Compute col.scores (microarray data)
-  ##if ( ! exists( "col.scores" ) || is.null( col.scores ) || nrow( col.scores ) != attr( ratios, "ncol" ) ||
-  ##    ncol( col.scores ) != max( ks ) ) {
-  if ( n.clust.per.col < k.clust && ## If using all columns, can skip this step...  
-      ( force.col || ( row.scaling[ iter ] > 0 && ! is.na( col.iters[ 1 ] ) && iter %in% col.iters ) ) ) {
-    if ( is.null( col.scores ) ) {
-      col.scores <- matrix( 0, nrow=attr( ratios, "ncol" ), ncol=max( ks ) )
-      rownames( col.scores ) <- attr( ratios, "cnames" )
-      col.scores <- matrix.reference( col.scores )
-    } else col.scores[ ,ks ] <- 0
-    ##col.scores <- matrix( 0, nrow=attr( ratios, "ncol" ), ncol=max( ks ) )
-    ## cs.func <- function() { ## for profiling
+##row.scores }; row.scores <- rs.func()    
+}
+
+## Compute col.scores (microarray data)
+##if ( ! exists( "col.scores" ) || is.null( col.scores ) || nrow( col.scores ) != attr( ratios, "ncol" ) ||
+##    ncol( col.scores ) != max( ks ) ) {
+    if ( n.clust.per.col < k.clust && ## If using all columns, can skip this step...  
+            ( force.col || ( row.scaling[ iter ] > 0 && ! is.na( col.iters[ 1 ] ) && iter %in% col.iters ) ) ) {
+        if ( is.null( col.scores ) ) {
+            col.scores <- matrix( 0, nrow=attr( ratios, "ncol" ), ncol=max( ks ) )
+                rownames( col.scores ) <- attr( ratios, "cnames" )
+                col.scores <- matrix.reference( col.scores )
+        } else col.scores[ ,ks ] <- 0
+##col.scores <- matrix( 0, nrow=attr( ratios, "ncol" ), ncol=max( ks ) )
+## cs.func <- function() { ## for profiling
     for ( i in names( row.weights ) ) { 
-      if ( row.weights[ i ] == 0 || is.na( row.weights[ i ] ) ) next
-      tmp.col <- do.call( cbind, mc$apply( ks, get.col.scores, ratios=ratios[[ i ]]
+        if ( row.weights[ i ] == 0 || is.na( row.weights[ i ] ) ) next
+            tmp.col <- do.call( cbind, mc$apply( ks, get.col.scores, ratios=ratios[[ i ]]
 #ifndef PACKAGE
-                                          , method=col.score.func
+                        , method=col.score.func
 #endif
-                                          ) )
-      tmp <- is.infinite( tmp.col ) | is.na( tmp.col )
-      if ( any( tmp ) ) tmp.col[ tmp ] <-
-        quantile( tmp.col[ col.memb[,][ rownames( tmp.col ), ] == 1 & ! tmp ], 0.95 ) ##0 ## No measurement is NOT an NA - it is an observation
-      tmp <- rownames( col.scores )[ rownames( col.scores ) %in% rownames( tmp.col ) ]
-      col.scores[ tmp, ks ] <- col.scores[ tmp, ks ] + tmp.col[ tmp, ] * row.weights[ i ]
-      rm( tmp.col, tmp )
+                        ) )
+                tmp <- is.infinite( tmp.col ) | is.na( tmp.col )
+                if ( any( tmp ) ) tmp.col[ tmp ] <-
+                    quantile( tmp.col[ col.memb[,][ rownames( tmp.col ), ] == 1 & ! tmp ], 0.95 ) ##0 ## No measurement is NOT an NA - it is an observation
+                        tmp <- rownames( col.scores )[ rownames( col.scores ) %in% rownames( tmp.col ) ]
+                        col.scores[ tmp, ks ] <- col.scores[ tmp, ks ] + tmp.col[ tmp, ] * row.weights[ i ]
+                        rm( tmp.col, tmp )
     }
     attr( col.scores, "changed" ) <- TRUE
-    ## col.scores }; col.scores <- cs.func()
-  }
-  
-  ## Run meme on each cluster (every meme.iters iterations)
-  for ( i in names( mot.weights ) ) {
-    if ( force.motif == "run.meme" || ( mot.scaling[ iter ] > 0 && ! is.na( meme.iters[[ i ]][ 1 ] ) &&
-           iter %in% meme.iters[[ i ]] && exists( "genome.info" ) && ! no.genome.info ) ) {
-      if ( mot.weights[ i ] == 0 || is.na( mot.weights[ i ] ) ) next
-      tmp <- motif.all.clusters( ks, seq.type=i, verbose=T ) ##strsplit( i, " " )[[ 1 ]][ 1 ],
-                                               ##algo=strsplit( i, " " )[[ 1 ]][ 2 ] )
-#ifndef PACKAGE
-      tmp <- list.reference( tmp, file=sprintf( "%s/meme.scores.%s", cmonkey.filename, i ), type="RDS" )
-#endif
-      meme.scores[[ i ]] <- tmp
+## col.scores }; col.scores <- cs.func()
     }
-  }
-  
-  ## Compute mot.scores from meme output
-  if ( force.motif == TRUE || force.motif == "run.meme" || ( mot.scaling[ iter ] > 0 && ! is.na( mot.iters[ 1 ] ) &&
-                         ##iter %in% c( meme.iters, mot.iters ) && exists( "genome.info" ) && ! no.genome.info ) ) {
-                                iter %in% mot.iters && exists( "genome.info" ) && ! no.genome.info ) ) {
-    if ( is.null( mot.scores ) ) {
-      mot.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
-      rownames( mot.scores ) <- attr( ratios, "rnames" )
-      mot.scores <- matrix.reference( mot.scores )
-    } else mot.scores[ ,ks ] <- 0
-    tmp.mots <- list()
-    for ( i in names( mot.weights ) ) {
-      if ( mot.weights[ i ] == 0 || is.na( mot.weights[ i ] ) ) next
-      tmp.mot <- do.call( cbind, mc$apply( ks, get.motif.scores, seq.type=i ) )
-      tmp.mot[ is.infinite( tmp.mot ) | is.na( tmp.mot ) ] <- 0 ## No measurement is NOT an NA - it is an observation
-      if ( quantile.normalize && sum( mot.weights > 0 & ! is.na( mot.weights ) ) > 1 ) tmp.mots[[ i ]] <- tmp.mot
-      else mot.scores[ ,ks ] <- mot.scores[ ,ks ] + tmp.mot[,] * mot.weights[ i ]
-      rm( tmp.mot )
-    }
-    if ( quantile.normalize && length( tmp.mots ) > 1 ) {
-      tmp.mots <- quantile.normalize.scores( tmp.mots, weights=mot.weights[ mot.weights != 0 ] )
-      for ( i in names( tmp.mots ) ) mot.scores[ ,ks ] <- mot.scores[ ,ks ] + tmp.mots[[ i ]][,] * mot.weights[ i ]
-      rm( tmp.mots )
-    }
-    attr( mot.scores, "changed" ) <- TRUE
-  }
 
-  cluster.ns <- NULL
-  ## Compute net.scores from STRING ... add weighted scores for other networks (if exist)
-  if ( force.net || ( net.scaling[ iter ] > 0 && ! is.na( net.iters[ 1 ] ) && exists( "genome.info" ) &&
-                     iter %in% net.iters ) ) {
-    ##net.scores <- NULL
-    if ( is.null( net.scores ) ) {
-      net.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
-      rownames( net.scores ) <- attr( ratios, "rnames" )
-      net.scores <- matrix.reference( net.scores )
-    } else net.scores[ ,ks ] <- 0
-    tmp.nets <- list()
-    ## ns.func <- function() { ## for profiling
-    for ( i in names( networks ) ) { 
-      if ( net.weights[ i ] == 0 || is.na( net.weights[ i ] ) ) next
-      if ( nrow( subset( networks[[ i ]], protein1 %in% attr( ratios, "rnames" ) & protein2 %in%
-                        attr( ratios, "rnames" ) ) ) <= 0 ) next
-      tmp.net <- do.call( cbind, mc$apply( ks, get.network.scores, net=networks[[ i ]] ) )
-      if ( all( is.na( tmp.net ) ) || all( is.character( tmp.net ) ) ) next
-      ##tmp.net[,] <- tmp.net[,] - max( tmp.net[ ! is.infinite( tmp.net ) ], na.rm=T ) -
-      ##  abs( diff( range( tmp.net[ ! is.infinite( tmp.net ) ], na.rm=T ) ) ) / 10
-      tmp.net[ is.infinite( tmp.net ) | is.na( tmp.net ) ] <- 0 ## No edge is NOT an NA - it is an observation
-      if ( quantile.normalize && sum( net.weights > 0 & ! is.na( net.weights ) ) > 1 ) tmp.nets[[ i ]] <- tmp.net
-      else net.scores[ ,ks ] <- net.scores[ ,ks ] + tmp.net[,] * net.weights[ i ]
-      cluster.ns <- cbind( cluster.ns, do.call( c, mc$apply( ks, function( k ) mean( tmp.net[ get.rows( k ), k ],
-                                                                                    na.rm=T, trim=0.05 ) ) ) )
-      colnames( cluster.ns )[ ncol( cluster.ns ) ] <- i
-      rm( tmp.net )
+## Run meme on each cluster (every meme.iters iterations)
+    for ( i in names( mot.weights ) ) {
+        if ( force.motif == "run.meme" || ( mot.scaling[ iter ] > 0 && ! is.na( meme.iters[[ i ]][ 1 ] ) &&
+                    iter %in% meme.iters[[ i ]] && exists( "genome.info" ) && ! no.genome.info ) ) {
+            if ( mot.weights[ i ] == 0 || is.na( mot.weights[ i ] ) ) next
+                tmp <- motif.all.clusters( ks, seq.type=i, verbose=T ) ##strsplit( i, " " )[[ 1 ]][ 1 ],
+##algo=strsplit( i, " " )[[ 1 ]][ 2 ] )
+#ifndef PACKAGE
+                    tmp <- list.reference( tmp, file=sprintf( "%s/meme.scores.%s", cmonkey.filename, i ), type="RDS" )
+#endif
+                        meme.scores[[ i ]] <- tmp
+        }
     }
-    
+
+## Compute mot.scores from meme output
+    if ( force.motif == TRUE || force.motif == "run.meme" || ( mot.scaling[ iter ] > 0 && ! is.na( mot.iters[ 1 ] ) &&
+##iter %in% c( meme.iters, mot.iters ) && exists( "genome.info" ) && ! no.genome.info ) ) {
+        iter %in% mot.iters && exists( "genome.info" ) && ! no.genome.info ) ) {
+            if ( is.null( mot.scores ) ) {
+                mot.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
+                    rownames( mot.scores ) <- attr( ratios, "rnames" )
+                    mot.scores <- matrix.reference( mot.scores )
+            } else mot.scores[ ,ks ] <- 0
+                tmp.mots <- list()
+                    for ( i in names( mot.weights ) ) {
+                        if ( mot.weights[ i ] == 0 || is.na( mot.weights[ i ] ) ) next
+                            tmp.mot <- do.call( cbind, mc$apply( ks, get.motif.scores, seq.type=i ) )
+                                tmp.mot[ is.infinite( tmp.mot ) | is.na( tmp.mot ) ] <- 0 ## No measurement is NOT an NA - it is an observation
+                                if ( quantile.normalize && sum( mot.weights > 0 & ! is.na( mot.weights ) ) > 1 ) tmp.mots[[ i ]] <- tmp.mot
+                                else mot.scores[ ,ks ] <- mot.scores[ ,ks ] + tmp.mot[,] * mot.weights[ i ]
+                                    rm( tmp.mot )
+                    }
+            if ( quantile.normalize && length( tmp.mots ) > 1 ) {
+                tmp.mots <- quantile.normalize.scores( tmp.mots, weights=mot.weights[ mot.weights != 0 ] )
+                    for ( i in names( tmp.mots ) ) mot.scores[ ,ks ] <- mot.scores[ ,ks ] + tmp.mots[[ i ]][,] * mot.weights[ i ]
+                        rm( tmp.mots )
+            }
+            attr( mot.scores, "changed" ) <- TRUE
+        }
+
+        cluster.ns <- NULL
+## Compute net.scores from STRING ... add weighted scores for other networks (if exist)
+            if ( force.net || ( net.scaling[ iter ] > 0 && ! is.na( net.iters[ 1 ] ) && exists( "genome.info" ) &&
+                        iter %in% net.iters ) ) {
+##net.scores <- NULL
+                if ( is.null( net.scores ) ) {
+                    net.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
+                        rownames( net.scores ) <- attr( ratios, "rnames" )
+                        net.scores <- matrix.reference( net.scores )
+                } else net.scores[ ,ks ] <- 0
+                    tmp.nets <- list()
+## ns.func <- function() { ## for profiling
+    for ( i in names( networks ) ) { 
+        if ( net.weights[ i ] == 0 || is.na( net.weights[ i ] ) ) next
+            if ( nrow( subset( networks[[ i ]], protein1 %in% attr( ratios, "rnames" ) & protein2 %in%
+                            attr( ratios, "rnames" ) ) ) <= 0 ) next
+                tmp.net <- do.call( cbind, mc$apply( ks, get.network.scores, net=networks[[ i ]] ) )
+                    if ( all( is.na( tmp.net ) ) || all( is.character( tmp.net ) ) ) next
+##tmp.net[,] <- tmp.net[,] - max( tmp.net[ ! is.infinite( tmp.net ) ], na.rm=T ) -
+##  abs( diff( range( tmp.net[ ! is.infinite( tmp.net ) ], na.rm=T ) ) ) / 10
+                        tmp.net[ is.infinite( tmp.net ) | is.na( tmp.net ) ] <- 0 ## No edge is NOT an NA - it is an observation
+                            if ( quantile.normalize && sum( net.weights > 0 & ! is.na( net.weights ) ) > 1 ) tmp.nets[[ i ]] <- tmp.net
+                            else net.scores[ ,ks ] <- net.scores[ ,ks ] + tmp.net[,] * net.weights[ i ]
+                                cluster.ns <- cbind( cluster.ns, do.call( c, mc$apply( ks, function( k ) mean( tmp.net[ get.rows( k ), k ],
+                                                    na.rm=T, trim=0.05 ) ) ) )
+                                    colnames( cluster.ns )[ ncol( cluster.ns ) ] <- i
+                                    rm( tmp.net )
+    }
+
     if ( quantile.normalize && length( tmp.nets ) > 1 ) {
-      tmp.nets <- quantile.normalize.scores( tmp.nets, weights=net.weights[ net.weights != 0 ] )
-      for ( i in names( tmp.nets ) ) net.scores[ ,ks ] <- net.scores[ ,ks ] + tmp.nets[[ i ]][,] * net.weights[ i ]
-      rm( tmp.nets )
+        tmp.nets <- quantile.normalize.scores( tmp.nets, weights=net.weights[ net.weights != 0 ] )
+            for ( i in names( tmp.nets ) ) net.scores[ ,ks ] <- net.scores[ ,ks ] + tmp.nets[[ i ]][,] * net.weights[ i ]
+                rm( tmp.nets )
     }
     attr( net.scores, "changed" ) <- TRUE
 
-    cluster.ns <- cbind( cluster.ns, do.call( c, mc$apply( ks, function( k ) mean( net.scores[ get.rows( k ), k ],
-                                                                                  na.rm=T, trim=0.05 ) ) ) )
-    colnames( cluster.ns )[ ncol( cluster.ns ) ] <- "net.scores"
-    ##list( net.scores, cluster.ns ) }; tmp <- ns.func(); net.scores <- tmp[[ 1 ]]; cluster.ns <- tmp[[ 2 ]]
-  }
-  
-  ## Compute set.scores for an iteration
-  if ( force.set || ( set.scaling[ iter ] > 0 && ! is.na( set.iters[ 1 ] ) && exists( "genome.info" ) && iter %in% set.iters ) ) {
-    if ( is.null( set.scores ) ) {
-      set.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
-      rownames( set.scores ) <- attr( ratios, "rnames" )
-      set.scores <- matrix.reference( set.scores )
-    } else {
-      set.scores[ ,ks ] <- 0
-    }
-    tmp.sets <- list()
-    for ( set.type in names( enrichment.sets ) ) { 
-      ## If the weights for the set.type are 0 then skip this set type
-      if ( set.weights[ set.type ] == 0 || is.na( set.weights[ set.type ] ) ) {
-        next
-      }
-      ## Run the analysis
-      tmp.set <- do.call( cbind, mc$apply( ks, get.set.enrichment.scores, set=set.type ) )
-      tmp.set[ is.infinite( tmp.set ) | is.na( tmp.set ) ] <- 0 ## Ensures that no edge is an NA
-      # If there is an issue with the weights then don't use them
-      if ( quantile.normalize && sum( set.weights > 0 & ! is.na( set.weights ) ) > 1 ) {
-        tmp.sets[[ set.type ]] <- tmp.set
-      # Or do if they are working
-      } else {
-        set.scores[ ,ks ] <- set.scores[ ,ks ] + tmp.set[,] * set.weights[ set.type ]
-      }
-      cluster.ses <- cbind( cluster.ses, do.call( c, mc$apply( ks, function( k ) mean( tmp.set[ get.rows( k ), k ], na.rm=T, trim=0.05 ) ) ) )
-      colnames( cluster.ses )[ ncol( cluster.ses ) ] <- set.type
-      rm( tmp.set )
-    }
-    
-    if ( quantile.normalize && length( tmp.sets ) > 1 ) {
-      tmp.sets <- quantile.normalize.scores( tmp.sets, weights=set.weights[ set.weights != 0 ] )
-      for ( set.type in names( tmp.sets ) ) {
-        set.scores[ ,ks ] <- set.scores[ ,ks ] + tmp.sets[[ set.type ]][,] * set.weights[ set.type ]
-      }
-      rm( tmp.sets )
-    }
-    attr( set.scores, "changed" ) <- TRUE
-    cluster.ses <- cbind( cluster.ses, do.call( c, mc$apply( ks, function( k ) mean( set.scores[ get.rows( k ), k ], na.rm=T, trim=0.05 ) ) ) )
-    colnames( cluster.ses )[ ncol( cluster.ses ) ] <- "set.scores"
-  }
-  list( r=row.scores, c=col.scores, m=mot.scores, ms=meme.scores, n=net.scores, se=set.scores, cns=cluster.ns, cses=cluster.ses )
+        cluster.ns <- cbind( cluster.ns, do.call( c, mc$apply( ks, function( k ) mean( net.scores[ get.rows( k ), k ],
+                            na.rm=T, trim=0.05 ) ) ) )
+        colnames( cluster.ns )[ ncol( cluster.ns ) ] <- "net.scores"
+##list( net.scores, cluster.ns ) }; tmp <- ns.func(); net.scores <- tmp[[ 1 ]]; cluster.ns <- tmp[[ 2 ]]
+            }
+
+## Compute set.scores for an iteration
+        if ( force.set || ( set.scaling[ iter ] > 0 && ! is.na( set.iters[ 1 ] ) && exists( "genome.info" ) && iter %in% set.iters ) ) {
+            if ( is.null( set.scores ) ) {
+                set.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
+                    rownames( set.scores ) <- attr( ratios, "rnames" )
+                    set.scores <- matrix.reference( set.scores )
+            } else {
+                set.scores[ ,ks ] <- 0
+            }
+            tmp.sets <- list()
+                for ( set.type in names( enrichment.sets ) ) { 
+## If the weights for the set.type are 0 then skip this set type
+                    if ( set.weights[ set.type ] == 0 || is.na( set.weights[ set.type ] ) ) {
+                        next
+                    }
+## Run the analysis
+                    tmp.set <- do.call( cbind, mc$apply( ks, get.set.enrichment.scores, set=set.type ) )
+                        tmp.set[ is.infinite( tmp.set ) | is.na( tmp.set ) ] <- 0 ## Ensures that no edge is an NA
+# If there is an issue with the weights then don't use them
+                        if ( quantile.normalize && sum( set.weights > 0 & ! is.na( set.weights ) ) > 1 ) {
+                            tmp.sets[[ set.type ]] <- tmp.set
+# Or do if they are working
+                        } else {
+                            set.scores[ ,ks ] <- set.scores[ ,ks ] + tmp.set[,] * set.weights[ set.type ]
+                        }
+                    cluster.ses <- cbind( cluster.ses, do.call( c, mc$apply( ks, function( k ) mean( tmp.set[ get.rows( k ), k ], na.rm=T, trim=0.05 ) ) ) )
+                        colnames( cluster.ses )[ ncol( cluster.ses ) ] <- set.type
+                        rm( tmp.set )
+                }
+
+            if ( quantile.normalize && length( tmp.sets ) > 1 ) {
+                tmp.sets <- quantile.normalize.scores( tmp.sets, weights=set.weights[ set.weights != 0 ] )
+                    for ( set.type in names( tmp.sets ) ) {
+                        set.scores[ ,ks ] <- set.scores[ ,ks ] + tmp.sets[[ set.type ]][,] * set.weights[ set.type ]
+                    }
+                rm( tmp.sets )
+            }
+            attr( set.scores, "changed" ) <- TRUE
+                cluster.ses <- cbind( cluster.ses, do.call( c, mc$apply( ks, function( k ) mean( set.scores[ get.rows( k ), k ], na.rm=T, trim=0.05 ) ) ) )
+                colnames( cluster.ses )[ ncol( cluster.ses ) ] <- "set.scores"
+        }
+        list( r=row.scores, c=col.scores, m=mot.scores, ms=meme.scores, n=net.scores, se=set.scores, cns=cluster.ns, cses=cluster.ses )
 }
 
 get.rows <- function( k, rm=get("row.membership") ) { out <- unique( rownames( which( rm[] == k, arr=T ) ) );
