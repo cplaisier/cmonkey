@@ -145,6 +145,7 @@ cmonkey.init <- function( env=NULL, ... ) {
   ## Net weights and grouping weights - names must correspond to full file paths (sifs) that are to be read in.
   set.param( "net.weights", c( string=0.5, operons=0.5 ) ) ## prolinks=0.5 Relative scaling(s) of each network
   set.param( "set.scaling", seq( 0, 0.5, length=n.iter*3/4 ) ) ##0.1 0.25
+  set.param( "set.types", list(miRNA = c(file='pita_miRNA_sets.csv',cutoff=0.05)) )
   set.param( "set.weights", c( miRNA=1 ) )
   ## Can use pre-set nets: "operons"; "prolinks.(GN/GC/PP/RS)"; "predictome.(chromo/comp/fusion/phylogenetic)";
   ##           "string.(combined/neighborhood/fusion/cooccurence/coexpression/experimental/database/textmining)"
@@ -433,7 +434,9 @@ cmonkey.init <- function( env=NULL, ... ) {
     }
     
     # Load enrichment sets
-    enrichment.sets <- get.enrichment.sets(set.types=set.types)
+    if( ! is.na(set.types) ) {
+      enrichment.sets <- get.enrichment.sets(set.types=set.types)
+    }
 
     ## Get common prefix from feature.names and use those genes (assume >40% of ORF names have this suffix)
     if ( exists( 'ratios' ) && ! is.null( ratios ) ) tmp <- toupper( attr( ratios, "rnames" ) )
