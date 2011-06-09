@@ -144,6 +144,8 @@ cmonkey.init <- function( env=NULL, ... ) {
   set.param( "net.scaling", seq( 0, 0.5, length=n.iter*3/4 ) ) ##0.1 0.25
   ## Net weights and grouping weights - names must correspond to full file paths (sifs) that are to be read in.
   set.param( "net.weights", c( string=0.5, operons=0.5 ) ) ## prolinks=0.5 Relative scaling(s) of each network
+  set.param( "set.scaling", seq( 0, 0.5, length=n.iter*3/4 ) ) ##0.1 0.25
+  set.param( "set.weights", c( miRNA=1 ) )
   ## Can use pre-set nets: "operons"; "prolinks.(GN/GC/PP/RS)"; "predictome.(chromo/comp/fusion/phylogenetic)";
   ##           "string.(combined/neighborhood/fusion/cooccurence/coexpression/experimental/database/textmining)"
   set.param( "grouping.weights", numeric() ) ## Vector of weights of 3-column tsvs to read (p1, score, group)
@@ -362,6 +364,7 @@ cmonkey.init <- function( env=NULL, ... ) {
 
   ## Make sure the total "weights" sum to one - the "scaling"s set the total scaling
   if ( sum( net.weights, na.rm=T ) > 0 ) net.weights <- net.weights / sum( net.weights, na.rm=T )
+  if ( sum( set.weights, na.rm=T ) > 0 ) set.weights <- set.weights / sum( set.weights, na.rm=T )
   if ( sum( row.weights, na.rm=T ) > 0 ) row.weights <- row.weights / sum( row.weights, na.rm=T )
   if ( sum( mot.weights, na.rm=T ) > 0 ) mot.weights <- mot.weights / sum( mot.weights, na.rm=T )
 
@@ -429,6 +432,9 @@ cmonkey.init <- function( env=NULL, ... ) {
       if ( ! is.null( env ) ) assign( "genome.info", genome.info, envir=env )
     }
     
+    # Load enrichment sets
+    enrichment.sets <- get.enrichment.sets(set.types=set.types)
+
     ## Get common prefix from feature.names and use those genes (assume >40% of ORF names have this suffix)
     if ( exists( 'ratios' ) && ! is.null( ratios ) ) tmp <- toupper( attr( ratios, "rnames" ) )
     else if ( exists( 'genome.info' ) && ! is.null( genome.info$feature.names ) ) {
