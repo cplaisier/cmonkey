@@ -14,7 +14,7 @@
 ## Returns a list indexed by set.type of a list indexed by set names of a named vector of gene keys with weights as the values.
 get.enrichment.sets <- function(set.types=NA) {
   # Make sure that there is something to intialize
-  if ( ! set.types=='NA') {
+  if ( is.na(set.types) ) {
     stop('Error in get.enrichment.sets -> No set.types.')
   }
   # Load data structure
