@@ -37,7 +37,7 @@ get.enrichment.sets <- function(set.types=NA) {
     d1 = read.csv(file=set.types[[set.type.i]]['file'], header=F)
     d2 = list()
     # Build a cutoff array to attach as an attribute for discretizing the data for hypergeometric p-value calculation
-    if ( ! set.types[[set.type.i]]['cutoff']==NA ) {
+    if ( ! is.na(set.types[[set.type.i]]['cutoff']) ) {
       # A two column file with cutoffs for each set:  Column 1 = set name, Column 2 = cutoff
       # e.g. hsa-miR-1,0.05
       #      hsa-miR-2,0.05
