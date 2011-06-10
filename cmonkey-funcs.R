@@ -514,6 +514,7 @@ get.all.scores <- function( ks=1:k.clust, force.row=F, force.col=F, force.motif=
             }
 
 ## Compute set.scores for an iteration
+        cluster.ses <- NULL
         if ( force.set || ( set.scaling[ iter ] > 0 && ! is.na( set.iters[ 1 ] ) && exists( "genome.info" ) && iter %in% set.iters ) ) {
             if ( is.null( set.scores ) ) {
                 set.scores <- matrix( 0, nrow=attr( ratios, "nrow" ), ncol=max( ks ) ) 
@@ -529,7 +530,7 @@ get.all.scores <- function( ks=1:k.clust, force.row=F, force.col=F, force.motif=
                         next
                     }
 ## Run the analysis
-                    tmp.set <- do.call( cbind, mc$apply( ks, get.set.enrichment.scores, set=set.type ) )
+                    tmp.set <- do.call( cbind, mc$apply( ks, get.set.enrichment.scores, set.type=set.type ) )
                         tmp.set[ is.infinite( tmp.set ) | is.na( tmp.set ) ] <- 0 ## Ensures that no edge is an NA
 # If there is an issue with the weights then don't use them
                         if ( quantile.normalize && sum( set.weights > 0 & ! is.na( set.weights ) ) > 1 ) {
@@ -1700,5 +1701,6 @@ if ( file.exists( "cmonkey-init.R" ) ) {
   source( "cmonkey-postproc.R", local=T ) ## Functions for all post-processing and analysis of cmonkey clusters
   source( "cmonkey-motif-other.R", local=T ) ## Functions for motif finding with other algorithms and blasting
   source( "cmonkey-bigmem.R", local=T ) ## Functions for using on-disk list and matrix storage for big organisms
+  source( "cmonkey-set-enrichment.R", local=T ) ## Functions for adding an enrichment analysis metric to cMonkey
 }
 #endif

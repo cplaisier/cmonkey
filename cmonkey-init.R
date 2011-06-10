@@ -133,6 +133,7 @@ cmonkey.init <- function( env=NULL, ... ) {
   ##set.param( "mot.iters", seq( 100, n.iter, by=10 ) ) ## Which iters to use results of most recent meme run in scores
   set.param( "mot.iters", seq( 601, max( n.iter, 605 ), by=3 ) ) ## Which iters to use results of most recent meme run in scores
   set.param( "net.iters", seq( 1, n.iter, by=7 ) ) ## Which iters to re-calculate network scores?
+  set.param( "set.iters", seq( 1, n.iter, by=7 ) ) ## Which iters to re-calculate network scores?
   set.param( "row.scaling", 6 )  ## Seems to work best for Mpn, works good for Halo
   set.param( "row.weights", c( ratios=1 ) ) ## Optionally load multiple ratios files and set relative weights
 #ifndef PACKAGE
@@ -436,6 +437,10 @@ cmonkey.init <- function( env=NULL, ... ) {
     # Load enrichment sets
     if( ! is.na(set.types) ) {
       enrichment.sets <- get.enrichment.sets(set.types=set.types)
+      all.genes.enrichment.set <- list() 
+      for( set.type in names(enrichment.sets)) {
+        all.genes.enrichment.set[[set.type]] <- unique(sapply(strsplit(names(unlist(enrichment.sets[[set.type]])),"\\."),"[",2))
+      }
     }
 
     ## Get common prefix from feature.names and use those genes (assume >40% of ORF names have this suffix)
@@ -853,7 +858,7 @@ cmonkey.init <- function( env=NULL, ... ) {
     meme.scores[[ i ]] <- list()
     meme.scores[[ i ]][[ k.clust + 1 ]] <- ""
   }
-  stats <- row.scores <- col.scores <- mot.scores <- net.scores <- r.scores <- NULL
+  stats <- row.scores <- col.scores <- mot.scores <- net.scores <- set.scores <- r.scores <- NULL
   old.row.membership <- old.col.membership <- r.scores <- NULL
 
   if ( ! exists( "favorite.cluster" ) )
